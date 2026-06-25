@@ -1,0 +1,31 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+concurrency:
+  group: deploy-databricks
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Databricks
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@9e3d54f16e916f9c0bbdfdb35a226be8d0077c25 # v0.294.0
+
+      # Pull-based deploy: the workspace Git folder fetches the latest main from
+      # GitHub. Mirroring (including deletions/renames) comes free from git pull,
+      # so there are no orphaned workspace files to prune.
+      - name: Sync Databricks Git folder to latest main
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks repos update "${{ vars.DATABRICKS_REPO_PATH }}" --branch main
+          echo "Git folder synced to latest main."
