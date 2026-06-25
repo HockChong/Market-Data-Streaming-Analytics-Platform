@@ -25,7 +25,7 @@ exchange_calendars==4.13.2
 # ============================================================================
 
 # Data processing (for Polygon flat files)
-pandas==3.0.0
+pandas==3.0.3
 pyarrow==23.0.0
 numpy==2.4.1
 
