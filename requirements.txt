@@ -14,7 +14,7 @@ massive==2.4.0
 # ============================================================================
 
 # Timezone handling
-pytz==2024.1
+pytz==2024.2
 
 # Market calendar (NYSE holidays, early closes)
 # Provides accurate trading day detection
