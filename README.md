@@ -133,3 +133,13 @@ On top of the row-level checks, a daily aggregate gate computes the rejection ra
 - **Linted (PEP8)** — `ruff check` and `ruff format --check` run as separate CI gates on every push ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 - **Error-free** — 44 pytest tests including real-SparkSession integration tests, plus Avro schema validation, all gating CI; DLT `expect_or_fail` expectations keep runtime failures loud rather than silent.
 - **Tooling** — This project uses the Databricks lakehouse equivalents of the suggested stack: Delta Lake + Spark SQL on Unity Catalog in place of Snowflake/Trino as the warehouse and query engine, Delta Live Tables pipelines + scheduled Databricks Jobs in place of Airflow for orchestration, and a Streamlit/Plotly dashboard in place of Tableau for visualization.
+
+## Instructor's Feedback
+
+> This is a production-grade data engineering project that demonstrates:
+>
+> - Strong understanding of streaming architectures and data quality patterns
+> - Thoughtful engineering decisions with clear justifications
+> - Comprehensive testing and documentation
+> - Real-world problem solving (dedup across sources, auditability, edge cases)
+> - Comprehensive README with architecture diagram (Mermaid), engineering decisions
