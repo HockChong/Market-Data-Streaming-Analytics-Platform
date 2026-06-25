@@ -34,7 +34,7 @@ numpy==2.4.1
 # ============================================================================
 
 # PySpark for Databricks notebooks
-pyspark==3.5.0
+pyspark==3.5.8
 # delta-spark==3.0.0  # Uncomment for Delta Lake operations
 
 # ============================================================================
