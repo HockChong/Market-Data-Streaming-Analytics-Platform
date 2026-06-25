@@ -1,0 +1,47 @@
+# ============================================================================
+# Core Dependencies
+# ============================================================================
+
+# Kafka and Schema Registry
+confluent-kafka==2.3.0
+confluent-kafka[avro]==2.3.0
+
+# Official Polygon.io Python client (includes WebSocket + REST support)
+massive==2.4.0
+
+# ============================================================================
+# Configuration and Utilities
+# ============================================================================
+
+# Timezone handling
+pytz==2024.1
+
+# Market calendar (NYSE holidays, early closes)
+# Provides accurate trading day detection
+exchange_calendars==4.13.2
+
+# ============================================================================
+# Data Processing
+# ============================================================================
+
+# Data processing (for Polygon flat files)
+pandas==3.0.0
+pyarrow==23.0.0
+numpy==2.4.1
+
+# ============================================================================
+# Databricks / PySpark (Comment out for local dev, uncomment for Databricks)
+# ============================================================================
+
+# PySpark for Databricks notebooks
+pyspark==3.5.0
+# delta-spark==3.0.0  # Uncomment for Delta Lake operations
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+pytest==7.4.3
+pytest-cov==4.1.0
+tenacity==9.1.4
+fastavro==1.12.1

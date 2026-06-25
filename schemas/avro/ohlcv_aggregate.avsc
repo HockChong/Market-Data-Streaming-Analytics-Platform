@@ -1,0 +1,88 @@
+{
+  "type": "record",
+  "name": "OHLCVAggregate",
+  "namespace": "com.polygon.market_data",
+  "doc": "Schema for 1-minute OHLCV aggregate bars from Polygon.io WebSocket API. Enforces data quality and type safety before Bronze layer ingestion.",
+  "fields": [
+    {
+      "name": "event_type",
+      "type": "string",
+      "doc": "Event type. For aggregate-per-minute messages this is 'AM'."
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "The ticker symbol for the aggregate window (e.g., AAPL, MSFT)."
+    },
+    {
+      "name": "open",
+      "type": "double",
+      "doc": "Opening price for this aggregate window."
+    },
+    {
+      "name": "high",
+      "type": "double",
+      "doc": "Highest price within this aggregate window."
+    },
+    {
+      "name": "low",
+      "type": "double",
+      "doc": "Lowest price within this aggregate window."
+    },
+    {
+      "name": "close",
+      "type": "double",
+      "doc": "Closing price for this aggregate window."
+    },
+    {
+      "name": "volume",
+      "type": "long",
+      "doc": "Tick volume during this aggregate window."
+    },
+    {
+      "name": "start_timestamp",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Start timestamp of the aggregate window (Unix milliseconds)."
+    },
+    {
+      "name": "end_timestamp",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "End timestamp of the aggregate window (Unix milliseconds)."
+    },
+    {
+      "name": "accumulated_volume",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "Today's accumulated volume up to this point. Can be null."
+    },
+    {
+      "name": "official_open",
+      "type": ["null", "double"],
+      "default": null,
+      "doc": "Today's official opening price. Can be null."
+    },
+    {
+      "name": "average_trade_size",
+      "type": ["null", "double"],
+      "default": null,
+      "doc": "Average trade size for this window. Can be null or zero."
+    },
+    {
+      "name": "otc",
+      "type": ["null", "boolean"],
+      "default": null,
+      "doc": "Indicates whether the ticker is OTC. Can be null."
+    },
+    {
+      "name": "transactions",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "Number of transactions in this aggregate window. Populated from flat-file sources; null for real-time streaming (not available in Polygon WebSocket AM events)."
+    },
+    {
+      "name": "ingestion_timestamp",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Timestamp when message was ingested by producer (Unix milliseconds)."
+    }
+  ]
+}

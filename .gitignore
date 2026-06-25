@@ -1,0 +1,18 @@
+# Virtual environment
+.venv/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+coverage.xml
+
+# Linting
+.ruff_cache/
+/python_packages/
+
+# Secrets / local config
+.env
+
+# Claude Code
+.claude/
+/claude.md 

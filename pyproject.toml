@@ -1,0 +1,57 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = [".venv", ".git", "__pycache__", ".pytest_cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = [
+    "E402",  # module-level import not at top — Databricks notebooks manipulate sys.path before imports
+    "E501",  # line too long — handled by formatter; remaining long lines are often unavoidable in Spark code
+    "E712",  # == True comparisons — PySpark col("x") == True is correct and NOT the same as col("x")
+    "E722",  # bare except — existing Databricks widget fallback pattern, acceptable in notebooks
+]
+
+[tool.ruff.lint.per-file-ignores]
+"databricks/bronze/*.py" = ["E302", "E303", "F821", "F704"]
+"databricks/silver/*.py" = ["E302", "E303", "F821"]
+"databricks/gold/*.py" = ["E302", "E303", "F821"]
+"databricks/setup/*.py" = ["E302", "E303", "F821"]
+"databricks/config/bronze_config.py" = ["F821"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config --maxfail=1 --tb=short"
+markers = [
+    "unit: fast pure-python tests with no Spark runtime dependency",
+    "integration: tests that exercise Spark or multi-module pipeline behavior",
+    "smoke: fast critical pipeline sanity checks",
+    "slow: heavy tests excluded from quick local runs",
+    "contract: schema/config invariants and cross-layer compatibility checks",
+    "spark_integration: requires local SparkSession (slow; skip with -m 'not spark_integration')",
+]
+
+[tool.coverage.run]
+omit = [
+    "tests/*",
+    "databricks/config/simple_logger.py",
+    # Config classes call dbutils.secrets.get() in __init__ — Databricks-runtime only
+    "databricks/config/base_config.py",
+    "databricks/config/bronze_config.py",
+    "databricks/config/silver_config.py",
+    "databricks/config/gold_config.py",
+]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
+exclude_lines = [
+    # Standard exclusions
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    # Display/print helpers — no business logic
+    "def print_",
+]
