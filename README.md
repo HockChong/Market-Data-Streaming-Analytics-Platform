@@ -1,5 +1,13 @@
 # Market Data Streaming & Analytics Platform
 
+**A production-grade streaming data pipeline that turns live US stock-market data into an analytics dashboard** — ingesting 1-minute price bars for US stock tickers from Polygon.io, processing them through a Databricks lakehouse, and serving them as a queryable star schema (~420M minute-level rows rolled up to ~2.9M daily rows).
+
+`Python` · `SQL` · `Apache Spark` · `Apache Kafka` · `Delta Lake` · `Databricks (Delta Live Tables)` · `AWS S3` · `Avro / Schema Registry` · `Streamlit` · `CI/CD (GitHub Actions)` · `pytest` · `dimensional modeling`
+
+---
+
+### How it works
+
 A streaming lakehouse on Databricks that ingests live 1-minute OHLCV bars for US equities from Polygon.io through Kafka (Avro), lands them in a medallion architecture (Bronze → Silver → Gold, Delta Live Tables), and serves a Streamlit analytics dashboard. The three hardest problems it solves: **(1)** Kafka delivers at-least-once, and the same bar can also arrive again via historical flat files — Silver deduplicates everything with a MERGE on `(symbol, start_timestamp)`; **(2)** data quality is auditable, not silent — invalid rows are quarantined with a rejection reason instead of dropped, and a daily quality gate halts the pipeline if rejection rates spike; **(3)** two independent sources (real-time stream + historical S3 flat files) are unified into one consistent table with deterministic source-priority conflict resolution.
 
 ## Architecture
@@ -97,49 +105,3 @@ Deep-dive documentation, including analyst-style business questions answerable f
 - **The feed is delayed, not true real-time.** The platform uses Polygon's delayed WebSocket feed; the architecture wouldn't change for the real-time feed, but latency claims are bounded by the source.
 - **Quarantine and audit cover a rolling 30-day window**, not all history — a deliberate trade-off to keep per-run scan cost constant. Older rejections age out of the audit tables.
 - **Single environment, no staging.** A next step would be a dev/prod split with Databricks Asset Bundles and table-level permissions, plus alerting on the WAP audit gate instead of relying on pipeline failure.
-
-## Capstone Criteria — Submission Map
-
-How this project satisfies each capstone review criterion, with links to the evidence.
-
-### Criteria 1: Project Spec
-
-- **Schemas** — The Avro contract for the streaming source is the single source of truth: [schemas/avro/ohlcv_aggregate.avsc](schemas/avro/ohlcv_aggregate.avsc). Column-level schemas for every Bronze/Silver/Gold table are documented in [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md), and each DLT table declares an explicit schema in code (e.g. [ohlcv_silver_dlt.py](databricks/silver/ohlcv_silver_dlt.py)).
-- **DAG and data model diagrams** — The end-to-end pipeline DAG is the Mermaid diagram in [Architecture](#architecture) above; table-level lineage is in [docs/DATA_LINEAGE.md](docs/DATA_LINEAGE.md). The data model is the Gold star schema documented in [Data model](#data-model-gold-star-schema) with ERDs per layer: [Bronze](docs/BRONZE_LAYER_ERD.md) / [Silver](docs/SILVER_LAYER_ERD.md) / [Gold](docs/GOLD_LAYER_ERD.md).
-- **Metrics and data quality checks** — The WAP audit table tracks rejection rate per day and per rule, with warn/critical thresholds and a session-completeness metric; the full enforcement model is in [docs/DATA_QUALITY_ENFORCEMENT.md](docs/DATA_QUALITY_ENFORCEMENT.md), and example quarantine analysis queries are in [docs/QUARANTINE_QUERIES.md](docs/QUARANTINE_QUERIES.md).
-- **Screenshots** — DLT pipeline runs, the WAP quality audit table, and the Streamlit dashboard (screener, ticker deep dive, watchlist) are captured in `docs/screenshots/`.
-
-### Criteria 2: Write Up
-
-- **Purpose and expected outputs** — Covered in the [project summary](#market-data-streaming--analytics-platform) at the top of this README: a streaming lakehouse that turns live and historical Polygon market data into an analytics-ready star schema and a Streamlit dashboard. The original scoping document is [docs/capstone_proposal.md](docs/capstone_proposal.md).
-- **Dataset and technology choices, with justifications** — Polygon.io 1-min OHLCV bars (live WebSocket + historical S3 flat files) and the Polygon news API; Kafka with Avro/Schema Registry for transport; Databricks Delta Live Tables for the medallion pipeline. Each non-obvious design choice is justified in [Engineering decisions](#engineering-decisions).
-- **Steps followed and challenges faced** — The three hardest problems (at-least-once duplicates across two sources, auditable data quality, deterministic source unification) and how they were solved are described in the summary and [Engineering decisions](#engineering-decisions); real-world edge cases (early-close trading days, stock splits, Avro poison messages) are called out there too.
-- **Possible future enhancements** — [Limitations & what I'd do next](#limitations--what-id-do-next).
-
-### Criteria 3: Data Quality Checks
-
-At least 2 checks per data source, enforced in DLT (hard-fail expectations + WAP quarantine):
-
-| Source | Checks |
-|---|---|
-| Polygon WebSocket stream (via Kafka) | Schema Registry validation on produce; dead-letter Delta table (`bronze/streaming_quarantine`, not a Kafka topic) for poison messages; `expect_or_fail` on timestamps (`start < end`, `start > 0`, ms unit) at [ohlcv_silver_dlt.py:346](databricks/silver/ohlcv_silver_dlt.py#L346); WAP rules `valid_price_positive`, `valid_ohlc_logic`, `valid_volume` ([silver_config.py:104](databricks/config/silver_config.py#L104)) |
-| Polygon historical flat files | Same unified Silver path, so identical timestamp expectations + the 3 WAP price/OHLC/volume rules apply; plus required, validated `start_date`/`end_date` parameters before any write ([historical_ingestion_flatfiles.py](databricks/bronze/historical_ingestion_flatfiles.py)) |
-| Polygon news API | `expect_or_fail` on `article_id` and `published_utc` ([news_silver_dlt.py:141](databricks/silver/news_silver_dlt.py#L141)); WAP quarantine rules `valid_title`, `valid_url`, `valid_timestamp_order` ([silver_config.py:66](databricks/config/silver_config.py#L66)) |
-
-On top of the row-level checks, a daily aggregate gate computes the rejection rate and halts the pipeline past a critical threshold ([ohlcv_silver_dlt.py:545](databricks/silver/ohlcv_silver_dlt.py#L545)).
-
-### Criteria 4: ETL Code
-
-- **Linted (PEP8)** — `ruff check` and `ruff format --check` run as separate CI gates on every push ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
-- **Error-free** — 44 pytest tests including real-SparkSession integration tests, plus Avro schema validation, all gating CI; DLT `expect_or_fail` expectations keep runtime failures loud rather than silent.
-- **Tooling** — This project uses the Databricks lakehouse equivalents of the suggested stack: Delta Lake + Spark SQL on Unity Catalog in place of Snowflake/Trino as the warehouse and query engine, Delta Live Tables pipelines + scheduled Databricks Jobs in place of Airflow for orchestration, and a Streamlit/Plotly dashboard in place of Tableau for visualization.
-
-## Instructor's Feedback
-
-> This is a production-grade data engineering project that demonstrates:
->
-> - Strong understanding of streaming architectures and data quality patterns
-> - Thoughtful engineering decisions with clear justifications
-> - Comprehensive testing and documentation
-> - Real-world problem solving (dedup across sources, auditability, edge cases)
-> - Comprehensive README with architecture diagram (Mermaid), engineering decisions
