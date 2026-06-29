@@ -282,6 +282,6 @@ databricks/
 
 - **Full Deployment Guide**: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
 - **Repository Guide**: [CLAUDE.md](../CLAUDE.md) for development patterns
-- **Architecture Docs**: [capstone_proposal.md](../capstone_proposal.md)
+- **Architecture Docs**: [ARCHITECTURE.md](../docs/ARCHITECTURE.md)
 
 **Need Help?** Check the troubleshooting section in [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).

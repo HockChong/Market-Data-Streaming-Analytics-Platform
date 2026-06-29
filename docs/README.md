@@ -4,8 +4,8 @@ Welcome to the documentation for the **Market Data Streaming & Analytics Platfor
 
 ## 📚 Core Documentation
 
-- [**Capstone Proposal**](capstone_proposal.md)  
-  The main overview of the project, including the architecture, data flow, technology justification, and key features.
+- [**Architecture Overview**](ARCHITECTURE.md)  
+  The design rationale behind the platform — medallion layer roles, technology choices and justification, the component data flow, and the schema-contract model.
 - [**Data Lineage**](DATA_LINEAGE.md)  
   End-to-end data flow through the Medallion architecture, table dependencies, architecture patterns, and storage locations.
 - [**Data Dictionary**](DATA_DICTIONARY.md)  

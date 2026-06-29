@@ -44,6 +44,8 @@ flowchart LR
 
 📸 See it running: [pipeline DAGs, quality audit, and dashboard screenshots](docs/screenshots/README.md).
 
+🏗️ Design rationale — layer roles, technology choices, and the schema-contract model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 A parallel news pipeline (Polygon news API → Bronze → [news_silver_dlt.py](databricks/silver/news_silver_dlt.py) → `fact_news_hc`) feeds ticker-level news into the same star schema.
 
 ## Engineering decisions
