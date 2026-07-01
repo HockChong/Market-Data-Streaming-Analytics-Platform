@@ -228,10 +228,25 @@ dlt.apply_changes(
     target="news_silver_hc",
     source="news_silver_enriched_hc",
     keys=["article_id"],
-    # Higher ingestion_timestamp wins: a Polygon article correction (re-published
-    # with a newer ingestion_timestamp) correctly overwrites the stale first-write.
-    # Under the old dropDuplicates pattern, a re-publish outside the 1h watermark
-    # window would silently double-emit and the stale row would survive in Silver.
+    # Dedup contract: winner per article_id is the row with the highest
+    # ingestion_timestamp. A Polygon correction ingested in a later run carries a
+    # higher ingestion_timestamp and correctly overwrites the stale first-write.
+    # (The old dropDuplicates pattern would instead silently double-emit and keep
+    # the stale row on any re-publish outside the 1h watermark window.)
+    #
+    # Why this is idempotent — do NOT "fix" it to a content-hash sequence:
+    #   * ingestion_timestamp is current_timestamp() evaluated once at the
+    #     append-only Bronze write (news_ingestion.py) and then frozen into that
+    #     immutable row. The MERGE orders by a *stored* per-version column, never a
+    #     live clock — so a full DLT refresh reprocesses the same Bronze rows and
+    #     picks the same winner.
+    #   * A re-run/backfill of an already-ingested window can't inject a *stale*
+    #     version: Polygon serves the article's current state, so a re-fetch returns
+    #     the latest content (just stamped with a fresh ingestion_timestamp).
+    #   * A content-hash tiebreak would be worse here: corrections that keep the same
+    #     published_utc would be decided by an arbitrary hash and could keep the stale
+    #     version — the exact common case ingestion_timestamp orders correctly.
+    # Revisit only if Polygon exposes a real revision field (e.g. updated_utc).
     sequence_by="ingestion_timestamp",
     ignore_null_updates=True,
     stored_as_scd_type=1,
