@@ -11,7 +11,7 @@ All tables live in `tabular.dataexpert` (Unity Catalog).
 
 | Table | Grain | Key analytic columns | Lookback |
 |---|---|---|---|
-| `fact_daily_market_adjusted_hc` | symbol × date | Raw OHLCV + `adj_open, adj_high, adj_low, adj_close, adj_volume, prev_adj_close, price_factor` | 400 days |
+| `fact_daily_market_adjusted_hc` | symbol × date | Raw OHLCV + `adj_open, adj_high, adj_low, adj_close, adj_volume, prev_adj_close, price_factor` + serving metrics (`close_5d`..`close_252d`, `rvol_20d`) | 400 days |
 | `fact_minute_market_hc` | symbol × minute | `start_timestamp` (BIGINT epoch), `open, high, low, close, volume` | **5 days** |
 | `fact_news_hc` | article × symbol | `published_date, title, publisher_name, author` | — |
 | `dim_ticker_hc` | symbol | `company_name, sector, industry, exchange, market_cap_category, is_active` | — |

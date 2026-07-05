@@ -171,7 +171,7 @@ This document provides a comprehensive view of data flow through the Market Data
 | `dim_ticker_hc` | `bronze/ticker_details` (latest `snapshot_date`) | `dim_ticker_dlt.py` | Type 1 ticker dimension — active **plus** delisted names referenced in OHLCV history (`is_active` flag; survivorship-free); SIC→sector mapping + cap tier in `ticker_details_dim_spark.py` |
 | `dim_split_hc` | `bronze/splits` (latest `snapshot_date`) | `dim_split_dlt.py` | Stock split events with cumulative `historical_adjustment_factor` (projection in `split_adjust_spark.py`) |
 | `fact_daily_market_hc` | `ohlcv_daily_silver_hc` | `fact_daily_market_dlt.py` | Daily OHLCV (reads pre-aggregated Silver, not raw minute Silver) |
-| `fact_daily_market_adjusted_hc` | `fact_daily_market_hc` + `dim_split_hc` | `dim_split_dlt.py` | Daily OHLCV with split-adjusted columns beside raw (factor join in `split_adjust_spark.py`) |
+| `fact_daily_market_adjusted_hc` | `fact_daily_market_hc` + `dim_split_hc` | `dim_split_dlt.py` | Daily OHLCV with split-adjusted columns beside raw (factor join in `split_adjust_spark.py`) plus rolling serving metrics — lag closes and `rvol_20d` (`daily_metrics_spark.py`) |
 | `fact_minute_market_hc` | `ohlcv_silver_hc` | `fact_minute_market_dlt.py` | 1-min OHLCV (market hours only, rolling window) |
 | `fact_minute_market_adjusted_hc` | `fact_minute_market_hc` + `dim_split_hc` | `dim_split_dlt.py` | 1-min OHLCV with split-adjusted columns beside raw; powers the dashboard intraday chart so the 2-day horizon stays continuous across splits |
 | `fact_news_hc` | `news_silver_hc` | `fact_news_dlt.py` | News articles by ticker (one row per article-ticker pair via explode) |
@@ -397,5 +397,7 @@ Applied in Silver layer (`ohlcv_daily_silver_hc` — `ohlcv_silver_dlt.py`) as a
 | Split-adjusted OHLCV | `fact_daily_market_adjusted_hc` | `adj_* = raw * price_factor` (price), `adj_volume = volume / price_factor`; `price_factor` from the first split after each date (`split_adjust_spark.py`) |
 | Split-adjusted minute OHLCV | `fact_minute_market_adjusted_hc` | Same factor logic at minute grain; read by the dashboard intraday chart (keeps the 2-day horizon continuous across splits) |
 | `prev_adj_close` | `fact_daily_market_adjusted_hc` | `lag(adj_close)` over symbol/date window — powers the `no_unexplained_gap` DQ check |
+| `close_5d` / `close_21d` / `close_63d` / `close_126d` / `close_252d` | `fact_daily_market_adjusted_hc` | `lag(adj_close, N)` over symbol/date window (`daily_metrics_spark.py`) — stored period-return anchors; the dashboard screener/watchlist derive 1W–1Y gains from them as point reads instead of query-time window scans |
+| `rvol_20d` | `fact_daily_market_adjusted_hc` | `adj_volume ÷ avg(adj_volume)` over the 20 prior trading days (`daily_metrics_spark.py`); NULL unless a full 20-day base exists, so young tickers read "—" in both dashboard surfaces |
 
 > **Consumer note:** for any cross-time price/return (charts, period gains), read the `adj_*` columns from `fact_daily_market_adjusted_hc`. No raw `price_change_pct` is materialized — a raw split-day move is a mechanical drop, not an economic return; derive the daily change from `adj_close`/`prev_adj_close` instead. All adjusted values are **price-return only** — split-adjusted but not dividend-adjusted (no cash-dividend feed).

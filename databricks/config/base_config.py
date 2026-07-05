@@ -78,6 +78,11 @@ class BaseConfig:
     # (daily_fact_lookback_days) references this single value. (Silver's daily
     # rollup is now a materialized view over the full minute table and applies
     # no lookback window of its own.)
+    # Known, accepted trade-off at 400: the screener date picker offers the last
+    # 90 days, and the 1Y-gain anchor (close_252d) needs ~365 calendar days
+    # before the SELECTED date — so for dates picked more than ~35 days back the
+    # anchor falls outside retention and 1Y Gain reads "—". Full coverage of the
+    # picker range would need ~455+ days (90 + 365); kept at 400 by choice.
     DAILY_AGGREGATION_LOOKBACK_DAYS = 400
 
     # Shutdown delay: minutes to keep producer/consumer running after session close.

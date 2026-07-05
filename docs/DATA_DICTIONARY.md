@@ -489,13 +489,20 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 | `adj_volume` | BIGINT | YES | Split-adjusted volume (`volume / price_factor`) |
 | `price_factor` | DOUBLE | YES | Cumulative adjustment factor applied to this row (1.0 if on/after the latest split) |
 | `prev_adj_close` | DOUBLE | YES | Previous-day `adj_close` (powers the unexplained-gap DQ check) |
+| `close_5d` | DOUBLE | YES | `adj_close` 5 trading days earlier (1W-gain anchor); NULL until 5 prior rows exist |
+| `close_21d` | DOUBLE | YES | `adj_close` 21 trading days earlier (1M-gain anchor) |
+| `close_63d` | DOUBLE | YES | `adj_close` 63 trading days earlier (3M-gain anchor) |
+| `close_126d` | DOUBLE | YES | `adj_close` 126 trading days earlier (6M-gain anchor) |
+| `close_252d` | DOUBLE | YES | `adj_close` 252 trading days earlier (1Y-gain anchor) |
+| `rvol_20d` | DOUBLE | YES | `adj_volume` ÷ 20-day prior average `adj_volume`; NULL unless a full 20-day base exists (`daily_metrics_spark.py`) |
 
 **Quality Checks**:
 - `expect_or_fail`: symbol IS NOT NULL, date IS NOT NULL
 - `expect` (warn): `no_unexplained_gap` — a large day-over-day move on `adj_close` with no split usually means a missing split; surfaces in the DLT event log
 
-**Grain**: One row per (symbol, date) — same row set as `fact_daily_market_hc`, with adjusted columns added
-**Recomputed**: Full materialized-view recompute each run (a split rewrites a symbol's entire history; append-only cannot express it)
+**Grain**: One row per (symbol, date) — same row set as `fact_daily_market_hc`, with adjusted columns and rolling serving metrics added
+**Recomputed**: Full materialized-view recompute each run (a split rewrites a symbol's entire history; append-only cannot express it) — this also keeps the stored lag/RVOL metrics consistent after a split
+**Serving metrics**: `close_5d`..`close_252d` and `rvol_20d` are materialized here (`databricks/utils/daily_metrics_spark.py`) so the dashboard screener/watchlist read single-date point queries instead of re-deriving window functions over a 400-day scan; both surfaces share one definition of each metric
 **Consumer note**: For charts and cross-time returns, use `adj_close`/`prev_adj_close` (the daily % change = `(adj_close - prev_adj_close) / prev_adj_close * 100`). No raw `price_change_pct` column is materialized — a raw split-day move is a mechanical drop, not an economic return. **All adjusted values are price-return only** — split-adjusted but **not** dividend-adjusted (no cash-dividend feed exists), so multi-period returns exclude dividends and understate dividend-paying names.
 
 ---
