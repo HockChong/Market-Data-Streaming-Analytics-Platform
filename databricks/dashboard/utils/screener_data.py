@@ -26,67 +26,37 @@ def fetch_sectors() -> pd.DataFrame:
 
 
 def fetch_screener_base(selected_date_str: str) -> pd.DataFrame:
-    """Fetch all screener rows for the selected date with bounded rolling context.
+    """Fetch all screener rows for the selected date as a single-date point read.
 
-    Lookback is 400 calendar days (~280 trading days) to support LAG(adj_close, 252)
-    for the 1-year gain column without a separate join.
-
-    Reads split-ADJUSTED columns from fact_daily_market_adjusted_hc so period-return
-    columns (1W–1Y gain) stay continuous across stock splits. The table also carries
-    raw `close`/`volume`, so every window function must reference `adj_*` explicitly —
-    a bare `close` here would silently use the unadjusted price.
+    The rolling context (lag closes close_5d..close_252d and rvol_20d) is
+    materialized on fact_daily_market_adjusted_hc by the Gold pipeline
+    (databricks/utils/daily_metrics_spark.py), so this query prunes straight to
+    one date via the table's (date, symbol) clustering instead of window-scanning
+    400 days of history per cache miss. The stored metrics are computed from the
+    split-ADJUSTED series, so period-return columns stay continuous across splits.
     """
     return _run_query(
         f"""
-        WITH market_context AS (
-            SELECT
-                symbol,
-                date,
-                adj_open   AS open,
-                adj_close  AS close,
-                adj_volume AS volume,
-                LAG(adj_close)     OVER (PARTITION BY symbol ORDER BY date) AS prev_close,
-                -- RVOL only once a full 20-day base exists (COUNT = 20), matching the
-                -- terminal's compute_window_stats which requires exactly 20 prior days;
-                -- otherwise NULL so a young ticker reads "—" in both surfaces.
-                CASE WHEN COUNT(adj_volume) OVER (
-                        PARTITION BY symbol
-                        ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
-                     ) = 20
-                     THEN adj_volume * 1.0 / NULLIF(AVG(adj_volume) OVER (
-                        PARTITION BY symbol
-                        ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
-                     ), 0)
-                END AS rvol_20d,
-                LAG(adj_close, 5)   OVER (PARTITION BY symbol ORDER BY date) AS close_5d,
-                LAG(adj_close, 21)  OVER (PARTITION BY symbol ORDER BY date) AS close_21d,
-                LAG(adj_close, 63)  OVER (PARTITION BY symbol ORDER BY date) AS close_63d,
-                LAG(adj_close, 126) OVER (PARTITION BY symbol ORDER BY date) AS close_126d,
-                LAG(adj_close, 252) OVER (PARTITION BY symbol ORDER BY date) AS close_252d
-            FROM {table("fact_daily_market_adjusted_hc")}
-            WHERE date >= DATE_SUB(?, 400)
-              AND date <= ?
-        )
         SELECT
-            c.symbol                                                              AS Symbol,
-            t.company_name                                                        AS Company,
-            t.sector                                                              AS Sector,
-            c.close                                                               AS Close,
-            ROUND((c.close - c.prev_close)  / NULLIF(c.prev_close, 0)  * 100, 2) AS `Chg %`,
-            ROUND((c.close - c.open)        / NULLIF(c.open, 0)        * 100, 2) AS `Intraday %`,
-            ROUND((c.open  - c.prev_close)  / NULLIF(c.prev_close, 0)  * 100, 2) AS `Gap %`,
-            ROUND(c.rvol_20d, 2)                                                  AS RVOL,
-            c.volume                                                              AS Volume,
-            ROUND(c.close * c.volume, 2)                                          AS `Dollar Volume`,
-            ROUND((c.close - c.close_5d)   / NULLIF(c.close_5d,   0) * 100, 2)  AS `1W Gain %`,
-            ROUND((c.close - c.close_21d)  / NULLIF(c.close_21d,  0) * 100, 2)  AS `1M Gain %`,
-            ROUND((c.close - c.close_63d)  / NULLIF(c.close_63d,  0) * 100, 2)  AS `3M Gain %`,
-            ROUND((c.close - c.close_126d) / NULLIF(c.close_126d, 0) * 100, 2)  AS `6M Gain %`,
-            ROUND((c.close - c.close_252d) / NULLIF(c.close_252d, 0) * 100, 2)  AS `1Y Gain %`
-        FROM market_context c
-        JOIN {table("dim_ticker_hc")} t ON c.symbol = t.symbol
-        WHERE c.date = ?
-          AND c.close >= 5.0
+            f.symbol                                                                       AS Symbol,
+            t.company_name                                                                 AS Company,
+            t.sector                                                                       AS Sector,
+            f.adj_close                                                                    AS Close,
+            ROUND((f.adj_close - f.prev_adj_close) / NULLIF(f.prev_adj_close, 0) * 100, 2) AS `Chg %`,
+            ROUND((f.adj_close - f.adj_open)       / NULLIF(f.adj_open, 0)       * 100, 2) AS `Intraday %`,
+            ROUND((f.adj_open  - f.prev_adj_close) / NULLIF(f.prev_adj_close, 0) * 100, 2) AS `Gap %`,
+            ROUND(f.rvol_20d, 2)                                                           AS RVOL,
+            f.adj_volume                                                                   AS Volume,
+            ROUND(f.adj_close * f.adj_volume, 2)                                           AS `Dollar Volume`,
+            ROUND((f.adj_close - f.close_5d)   / NULLIF(f.close_5d,   0) * 100, 2)         AS `1W Gain %`,
+            ROUND((f.adj_close - f.close_21d)  / NULLIF(f.close_21d,  0) * 100, 2)         AS `1M Gain %`,
+            ROUND((f.adj_close - f.close_63d)  / NULLIF(f.close_63d,  0) * 100, 2)         AS `3M Gain %`,
+            ROUND((f.adj_close - f.close_126d) / NULLIF(f.close_126d, 0) * 100, 2)         AS `6M Gain %`,
+            ROUND((f.adj_close - f.close_252d) / NULLIF(f.close_252d, 0) * 100, 2)         AS `1Y Gain %`
+        FROM {table("fact_daily_market_adjusted_hc")} f
+        JOIN {table("dim_ticker_hc")} t ON f.symbol = t.symbol
+        WHERE f.date = ?
+          AND f.adj_close >= 5.0
         """,
-        params=(selected_date_str,) * 3,
+        params=(selected_date_str,),
     )

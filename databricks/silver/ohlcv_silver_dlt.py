@@ -196,8 +196,11 @@ try:
     _today = _pd.Timestamp.today(tz="UTC").normalize()
 
     _EARLY_CLOSE_HHMM: dict[str, int] = {}
+    # History range tied to the Gold daily-fact retention window so any bar that
+    # can land in the daily fact (including backfills near the retention edge)
+    # has early-close awareness — not an independently drifting literal.
     for _session in _nyse_cal.sessions_in_range(
-        _today - _pd.Timedelta(days=400),
+        _today - _pd.Timedelta(days=BaseConfig.DAILY_AGGREGATION_LOOKBACK_DAYS),
         _today + _pd.Timedelta(days=30),
     ):
         # Use timezone string, not pytz object — pytz via pandas tz_convert

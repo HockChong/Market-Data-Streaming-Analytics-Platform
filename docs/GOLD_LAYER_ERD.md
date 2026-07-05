@@ -78,6 +78,12 @@ erDiagram
         bigint adj_volume
         double price_factor "Cumulative split adjustment applied"
         double prev_adj_close
+        double close_5d "Serving metrics: lag adj_close anchors (1W/1M/3M/6M/1Y)"
+        double close_21d
+        double close_63d
+        double close_126d
+        double close_252d
+        double rvol_20d "adj_volume vs 20-day prior average (NULL until full base)"
     }
 
     fact_minute_market_hc {

@@ -28,40 +28,33 @@ _QUOTE_COLUMNS = [
 def fetch_watchlist_quotes(tickers: list[str]) -> pd.DataFrame:
     """Return the latest screener-style metrics for each watchlisted ticker.
 
-    Uses a 150-day look-back window from MAX(date) so LAG(adj_close, 63) for
-    the 3-month gain column has a full window of trading days (~63 trading
-    days ≈ 92 calendar days), mirroring fetch_screener_base in screener_data.
+    Reads the rolling metrics (prev_adj_close, close_5d/21d/63d, rvol_20d)
+    materialized on fact_daily_market_adjusted_hc by the Gold pipeline
+    (databricks/utils/daily_metrics_spark.py) — the same stored columns the
+    screener reads, so both surfaces share one definition of each metric.
+    ROW_NUMBER picks each symbol's own latest session (a halted ticker still
+    shows its last trade); the 150-day bound keeps the scan short while
+    preserving the previous inclusion window for stale symbols.
 
-    Reads split-ADJUSTED columns from fact_daily_market_adjusted_hc so the
-    period-return columns stay continuous across stock splits.
+    Metrics are computed from the split-ADJUSTED series, so period-return
+    columns stay continuous across stock splits.
     """
     if not tickers:
         return pd.DataFrame(columns=_QUOTE_COLUMNS)
     placeholders = ", ".join("?" * len(tickers))
     return run_query_versioned(
         f"""
-        WITH market_context AS (
+        WITH latest AS (
             SELECT
                 symbol,
-                date,
                 adj_open   AS open,
                 adj_close  AS close,
                 adj_volume AS volume,
-                LAG(adj_close) OVER (PARTITION BY symbol ORDER BY date) AS prev_close,
-                -- RVOL only once a full 20-day base exists (COUNT = 20), matching
-                -- the screener; otherwise NULL so a young ticker reads "—".
-                CASE WHEN COUNT(adj_volume) OVER (
-                        PARTITION BY symbol
-                        ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
-                     ) = 20
-                     THEN adj_volume * 1.0 / NULLIF(AVG(adj_volume) OVER (
-                        PARTITION BY symbol
-                        ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
-                     ), 0)
-                END AS rvol_20d,
-                LAG(adj_close, 5)  OVER (PARTITION BY symbol ORDER BY date) AS close_5d,
-                LAG(adj_close, 21) OVER (PARTITION BY symbol ORDER BY date) AS close_21d,
-                LAG(adj_close, 63) OVER (PARTITION BY symbol ORDER BY date) AS close_63d,
+                prev_adj_close AS prev_close,
+                rvol_20d,
+                close_5d,
+                close_21d,
+                close_63d,
                 ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
             FROM {table("fact_daily_market_adjusted_hc")}
             WHERE symbol IN ({placeholders})
@@ -83,7 +76,7 @@ def fetch_watchlist_quotes(tickers: list[str]) -> pd.DataFrame:
             ROUND((c.close - c.close_5d)  / NULLIF(c.close_5d,  0) * 100, 2)    AS gain_1w_pct,
             ROUND((c.close - c.close_21d) / NULLIF(c.close_21d, 0) * 100, 2)    AS gain_1m_pct,
             ROUND((c.close - c.close_63d) / NULLIF(c.close_63d, 0) * 100, 2)    AS gain_3m_pct
-        FROM market_context c
+        FROM latest c
         JOIN {table("dim_ticker_hc")} t ON c.symbol = t.symbol
         WHERE c.rn = 1
         """,

@@ -25,6 +25,7 @@ from gold_config import GoldConfig
 _config = GoldConfig()
 
 import dlt
+from daily_metrics_spark import add_daily_metric_columns
 from pyspark.sql.functions import col, lit
 from pyspark.sql.functions import max as spark_max
 from split_adjust_spark import (
@@ -74,7 +75,7 @@ def dim_split_hc():
 
 @dlt.table(
     name="fact_daily_market_adjusted_hc",
-    comment="Daily OHLCV with split-adjusted columns beside raw; built from fact_daily_market_hc + dim_split_hc. Grain: one row per (symbol, date).",
+    comment="Daily OHLCV with split-adjusted columns beside raw, plus rolling serving metrics (lag closes, rvol_20d); built from fact_daily_market_hc + dim_split_hc. Grain: one row per (symbol, date).",
     schema="""
         symbol STRING,
         date DATE,
@@ -91,7 +92,13 @@ def dim_split_hc():
         adj_close DOUBLE,
         adj_volume BIGINT,
         price_factor DOUBLE,
-        prev_adj_close DOUBLE
+        prev_adj_close DOUBLE,
+        close_5d DOUBLE,
+        close_21d DOUBLE,
+        close_63d DOUBLE,
+        close_126d DOUBLE,
+        close_252d DOUBLE,
+        rvol_20d DOUBLE
     """,
     cluster_by=["date", "symbol"],
     table_properties={
@@ -114,10 +121,19 @@ def fact_daily_market_adjusted_hc():
     history, so append-only cannot express it. At ~2.9M daily rows the recompute
     is seconds. Both inputs live in this Gold pipeline, so dlt.read() wires the
     dependency order automatically (dim_split_hc and fact_daily_market_hc first).
+
+    Also materializes the dashboard serving metrics (close_5d..close_252d,
+    rvol_20d) via add_daily_metric_columns: the screener/watchlist read them as
+    single-date point queries instead of re-deriving them with window functions
+    over a 400-day scan on every cache miss. The window math rides the same
+    per-symbol sort prev_adj_close already pays, and the full recompute keeps
+    every stored metric consistent after a split rewrites history. The
+    dashboard's gold_version sentinel reads this table, so the metrics and the
+    rows they describe become visible in the same commit.
     """
     bars = dlt.read("fact_daily_market_hc")
     segments = adjustment_factor_segments(dlt.read("dim_split_hc"))
-    return apply_split_adjustment(bars, segments)
+    return add_daily_metric_columns(apply_split_adjustment(bars, segments))
 
 
 @dlt.table(
