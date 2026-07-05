@@ -35,11 +35,15 @@ flowchart LR
     subgraph Gold DLT
         D --> FD[fact_daily_market_hc]
         S --> FM[fact_minute_market_hc]
-        FD & FM --> ADJ[split-adjusted facts]
-        DIM[dim_ticker / dim_date / dim_split]
+        SP[dim_split_hc] --> FDA[fact_daily_market_adjusted_hc<br/>+ screener serving metrics]
+        SP --> FMA[fact_minute_market_adjusted_hc]
+        FD --> FDA
+        FM --> FMA
+        DIMS[dim_ticker_hc · dim_date_hc]
     end
 
-    ADJ --> APP[Streamlit dashboard<br/>screener · deep dive · watchlist]
+    FDA --> APP[Streamlit dashboard<br/>screener · deep dive · watchlist]
+    FMA --> APP
 ```
 
 📸 See it running: [pipeline DAGs, quality audit, and dashboard screenshots](docs/screenshots/README.md).
