@@ -44,4 +44,4 @@ pyspark==3.5.0
 pytest==7.4.3
 pytest-cov==4.1.0
 tenacity==9.1.4
-fastavro==1.12.1
+fastavro==1.12.2
