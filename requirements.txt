@@ -7,7 +7,7 @@ confluent-kafka==2.3.0
 confluent-kafka[avro]==2.3.0
 
 # Official Polygon.io Python client (includes WebSocket + REST support)
-massive==2.4.0
+massive==2.8.0
 
 # ============================================================================
 # Configuration and Utilities
