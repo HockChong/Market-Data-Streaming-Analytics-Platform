@@ -153,6 +153,9 @@ def _read_bronze_ohlcv_source(path: str):
             "event_time",
             to_timestamp(BaseConfig.timestamp_to_seconds(col("start_timestamp"), col("ts_unit"))),
         )
+        # Not what stops duplicates — apply_changes below handles that via
+        # _dedup_sequence. This just lets Databricks forget rows older than
+        # 10 minutes instead of tracking them forever.
         .withWatermark("event_time", LATE_ARRIVAL_WATERMARK)
     )
 

@@ -122,8 +122,19 @@ Streaming backbone for the market feed, with Schema Registry for data contracts 
 ### Databricks Delta Live Tables
 Unified batch + streaming engine with managed pipelines, declarative quality expectations, and stateful stream management — a natural fit for the medallion layers.
 
+**Chosen for:**
+- Declarative `expect_or_fail`/`expect`/WAP quarantine primitives instead of hand-rolled validation filters and a manually-wired dead-letter table
+- Automatic dependency ordering across `bronze_unified_hc` → `ohlcv_silver_hc` → `ohlcv_daily_silver_hc` in one pipeline update, instead of sequencing separate Structured Streaming jobs via Databricks Jobs/Airflow
+- Managed checkpointing, retry, and auto-optimize (ZORDER, liquid clustering) — less operational surface than a hand-rolled Structured Streaming + orchestrator setup
+- Trade-off: less control over exact micro-batch scheduling, and lock-in to Databricks' pipeline runtime versus a portable Structured Streaming job any Spark cluster could run
+
 ### Delta Lake (Unity Catalog Volumes)
 ACID transactions for financial correctness, time travel for debugging/auditing, and OPTIMIZE/Z-ORDER + compaction where read patterns justify it. Governed via Unity Catalog — no S3 credentials in code.
+
+**Chosen for:**
+- MERGE semantics the `apply_changes` dedup design depends on (`ohlcv_silver_hc`, `news_silver_hc`) — a plain Parquet table on UC Volumes has no atomic keyed upsert, so this isn't a generic ACID preference, it's a hard dependency
+- Time travel for auditing a bad Silver/Gold run without re-deriving state from Bronze
+- Trade-off vs. open alternatives (Iceberg/Hudi): narrower ecosystem outside Databricks, but tighter Unity Catalog governance and DLT's Enzyme incremental refresh (used by `ohlcv_daily_silver_hc`), which doesn't exist for Iceberg/Hudi here
 
 ### Databricks Apps (Streamlit + Plotly)
 Python-native dashboards (screener, ticker deep dive, watchlist) with no external BI tool and zero deployment friction.

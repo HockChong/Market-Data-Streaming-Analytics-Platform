@@ -275,6 +275,26 @@ Optional morning chain (after flat-file incremental):
 
 ---
 
+## Step 7: Run the Streamlit Dashboard
+
+Once Gold tables are populated:
+
+```bash
+pip install -r databricks/dashboard/requirements.txt
+
+streamlit run databricks/dashboard/app.py
+```
+
+**Page 1 — Signal Screener** (`localhost:8501`): cross-layer screener joining `fact_daily_market_hc` and `dim_ticker_hc`. Filter by sector, gain range, volume, and date.
+
+**Page 2 — Stock Deep Dive**: single-ticker terminal with OHLCV chart, intraday 1-minute bars (from `fact_minute_market_adjusted_hc`, so the 2-day horizon stays continuous across splits), technical indicators, and latest news from `fact_news_hc`.
+
+**Page 3 — Watchlist**: save favourite tickers and view their latest price, daily change, and screener-style metrics at a glance. The list persists to `watchlist.json` in the dashboard directory so it survives page reloads within the same Databricks App instance.
+
+> The dashboard reads from Databricks SQL via the connection configured in `databricks/dashboard/utils/connection.py`. Ensure your Databricks workspace credentials are set before launching.
+
+---
+
 ## Verification Checklist
 
 - [ ] Secrets loaded correctly (`dbutils.secrets.list(scope="ganhockchong-market-data")`)
@@ -490,6 +510,79 @@ GROUP BY rejection_reason;
 - Auto-terminate idle clusters
 - Run backfills during off-peak hours
 - Combine producer + consumer on one cluster if latency allows
+
+---
+
+## File Reference
+
+```
+databricks/
+├── DEPLOYMENT_GUIDE.md                         ← You are here
+├── config/
+│   ├── __init__.py                             ← Package init
+│   ├── base_config.py                          ← Shared config (paths, secrets, market hours)
+│   ├── bronze_config.py                        ← Bronze layer config (Kafka, S3, schema registry)
+│   ├── silver_config.py                        ← Silver layer config (DLT expectations, WAP)
+│   ├── gold_config.py                          ← Gold layer config (rolling windows, partitioning)
+│   ├── path_bootstrap.py                       ← Adds config/ to sys.path in notebooks
+│   └── simple_logger.py                        ← Structured logger for notebooks
+├── bronze/
+│   ├── streaming_producer.py                   ← Polygon WebSocket → Kafka producer
+│   ├── streaming_ingestion.py                  ← Kafka → Bronze Delta (real-time)
+│   ├── historical_ingestion_flatfiles.py       ← S3 flat files → Bronze (bootstrap backfill)
+│   ├── incremental_ingestion_flatfiles.py      ← S3 flat files → Bronze (daily fill)
+│   ├── news_ingestion.py                       ← Polygon REST → Bronze (news articles)
+│   ├── ticker_details_ingestion.py             ← Polygon REST → Bronze (ticker metadata)
+│   ├── splits_ingestion.py                     ← Polygon REST → Bronze (stock splits)
+│   ├── kafka_replay_backfill.py                ← Kafka batch replay for specific dates
+│   └── bronze_utils.py                         ← Shared Bronze helpers
+├── silver/
+│   ├── ohlcv_silver_dlt.py                     ← DLT: clean, deduplicate, WAP quarantine OHLCV
+│   └── news_silver_dlt.py                      ← DLT: clean, deduplicate news articles
+├── gold/
+│   ├── fact_daily_market_dlt.py                ← Daily OHLCV fact table
+│   ├── fact_minute_market_dlt.py               ← 1-minute OHLCV fact table (rolling window)
+│   ├── fact_news_dlt.py                        ← News fact table (article × ticker grain)
+│   ├── dim_date_dlt.py                         ← Date dimension (calendar + NYSE trading days)
+│   ├── dim_ticker_dlt.py                       ← Ticker dimension (sectors, market cap tiers)
+│   └── dim_split_dlt.py                        ← Split dimension + adjusted fact tables
+├── utils/
+│   ├── ohlcv_dedup_spark.py                    ← Deterministic dedup for OHLCV records
+│   ├── ohlcv_quarantine_spark.py               ← WAP quarantine logic for OHLCV
+│   ├── aggregation_utils.py                    ← Daily bar aggregation from minute data (daily MV)
+│   ├── wap_audit_spark.py                      ← WAP audit log writer
+│   ├── streaming_transforms.py                 ← Kafka message parsing transforms
+│   ├── streaming_ingestion_runtime.py          ← Streaming lifecycle management
+│   ├── news_transforms.py                      ← News article cleaning transforms
+│   ├── news_quarantine_spark.py                ← WAP quarantine logic for news
+│   ├── ticker_details_dim_spark.py             ← Ticker dimension transforms (SIC → sector)
+│   ├── ticker_details_helpers.py               ← Polygon API helpers for ticker details
+│   ├── split_adjust_spark.py                   ← Split-adjusted price calculations
+│   ├── market_cap_classification.py            ← Market cap tier classification
+│   └── incremental_flatfiles_runtime.py        ← Date range detection for incremental loads
+├── setup/
+│   ├── create_volume_paths.py                  ← One-time: create UC volume directories
+│   └── add_table_constraints.py                ← One-time: add PK/FK to Gold tables
+└── dashboard/
+    ├── app.py                                  ← Streamlit entry point
+    ├── app.yaml                                ← Deployment config
+    ├── requirements.txt                        ← Dashboard-specific dependencies
+    ├── pages/
+    │   ├── 1_Signal_Screener.py                ← Market screener page
+    │   ├── 2_Stock_Deep_Dive.py                ← Single-ticker deep dive
+    │   └── 3_Watchlist.py                      ← Saved-ticker watchlist page
+    └── utils/
+        ├── connection.py                       ← Databricks SQL connection
+        ├── theme.py                            ← UI theme constants
+        ├── screener_data.py                    ← Screener query logic
+        ├── screener_filters.py                 ← Screener filter components
+        ├── stock_terminal_data.py              ← Stock terminal query logic
+        ├── stock_terminal_charts.py            ← Plotly chart builders
+        ├── stock_terminal_indicators.py        ← Technical indicator calculations
+        ├── stock_terminal_render.py            ← Terminal layout rendering
+        ├── watchlist_data.py                   ← Watchlist query logic
+        └── watchlist_store.py                  ← Watchlist persistence (watchlist.json)
+```
 
 ---
 
