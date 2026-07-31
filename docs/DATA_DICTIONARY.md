@@ -387,7 +387,7 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 ### Table: `dim_ticker_hc` (Ticker Dimension)
 **Source**: `bronze/ticker_details` — latest `snapshot_date` partition only (column mapping in `databricks/utils/ticker_details_dim_spark.py`). Includes active **and** delisted/inactive names referenced by our OHLCV history (`is_active` distinguishes them).
 **Format**: Delta Lake
-**Partition**: None (small dimension, ~500 rows)
+**Partition**: None (small dimension — ~20K rows: active US stocks plus delisted/renamed names still referenced by OHLCV history; see [screenshots/README.md](screenshots/README.md) for a live pipeline run)
 **Location**: `tabular.dataexpert.dim_ticker_hc`
 **DLT Pipeline**: `databricks/gold/dim_ticker_dlt.py`
 

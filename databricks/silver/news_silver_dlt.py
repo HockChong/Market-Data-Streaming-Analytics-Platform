@@ -156,6 +156,7 @@ def news_silver_enriched():
     is_all_valid = is_valid_title & is_valid_url & is_valid_timestamp
 
     return (
+        # Same as OHLCV: memory cleanup, not dedup logic (see apply_changes below).
         df.withWatermark("ingestion_timestamp", LATE_ARRIVAL_WATERMARK)
         .filter(is_all_valid)
         .withColumn(

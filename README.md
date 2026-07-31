@@ -35,11 +35,15 @@ flowchart LR
     subgraph Gold DLT
         D --> FD[fact_daily_market_hc]
         S --> FM[fact_minute_market_hc]
-        FD & FM --> ADJ[split-adjusted facts]
-        DIM[dim_ticker / dim_date / dim_split]
+        SP[dim_split_hc] --> FDA[fact_daily_market_adjusted_hc<br/>+ screener serving metrics]
+        SP --> FMA[fact_minute_market_adjusted_hc]
+        FD --> FDA
+        FM --> FMA
+        DIMS[dim_ticker_hc · dim_date_hc]
     end
 
-    ADJ --> APP[Streamlit dashboard<br/>screener · deep dive · watchlist]
+    FDA --> APP[Streamlit dashboard<br/>screener · deep dive · watchlist]
+    FMA --> APP
 ```
 
 📸 See it running: [pipeline DAGs, quality audit, and dashboard screenshots](docs/screenshots/README.md).
@@ -85,7 +89,7 @@ Three layers of defense, by failure severity ([docs/DATA_QUALITY_ENFORCEMENT.md]
 2. **Row-level WAP quarantine** — business-rule failures are diverted with a rejection reason, never silently dropped.
 3. **Aggregate gate** — a daily audit log computes the rejection rate and fails the run past a critical threshold, plus a warn-only session-completeness check.
 
-The pytest suite (44 tests) includes real-SparkSession integration tests covering the dedup tiebreaker, quarantine reason precedence, quality-gate thresholds, and minute-to-daily aggregation ([tests/test_integration_spark.py](tests/test_integration_spark.py)). CI gates every push: `ruff check`, `ruff format --check`, `pytest --cov`, and Avro schema validation ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+The pytest suite (50 tests) includes real-SparkSession integration tests covering the dedup tiebreaker, quarantine reason precedence, quality-gate thresholds, and minute-to-daily aggregation ([tests/test_integration_spark.py](tests/test_integration_spark.py)). CI gates every push: `ruff check`, `ruff format --check`, `pytest --cov`, and Avro schema validation ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 Schema evolution is contract-first: [schemas/avro/ohlcv_aggregate.avsc](schemas/avro/ohlcv_aggregate.avsc) is the single source of truth, new fields must be nullable with defaults, and the Schema Registry validates every message before it reaches Kafka.
 
