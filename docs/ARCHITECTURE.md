@@ -134,7 +134,7 @@ ACID transactions for financial correctness, time travel for debugging/auditing,
 **Chosen for:**
 - MERGE semantics the `apply_changes` dedup design depends on (`ohlcv_silver_hc`, `news_silver_hc`) — a plain Parquet table on UC Volumes has no atomic keyed upsert, so this isn't a generic ACID preference, it's a hard dependency
 - Time travel for auditing a bad Silver/Gold run without re-deriving state from Bronze
-- Trade-off vs. open alternatives (Iceberg/Hudi): narrower ecosystem outside Databricks, but tighter Unity Catalog governance and DLT's Enzyme incremental refresh (used by `ohlcv_daily_silver_hc`), which doesn't exist for Iceberg/Hudi here
+- Trade-off vs. open alternatives (Iceberg/Hudi): narrower ecosystem outside Databricks, but tighter Unity Catalog governance and DLT's Enzyme incremental refresh engine (recomputes only changed groups instead of the whole table; used by `ohlcv_daily_silver_hc`), which doesn't exist for Iceberg/Hudi here
 
 ### Databricks Apps (Streamlit + Plotly)
 Python-native dashboards (screener, ticker deep dive, watchlist) with no external BI tool and zero deployment friction.

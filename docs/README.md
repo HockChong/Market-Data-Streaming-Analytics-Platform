@@ -2,6 +2,8 @@
 
 Welcome to the documentation for the **Market Data Streaming & Analytics Platform**. This folder contains detailed documentation on the architecture, data models, and interview preparation materials for the capstone project.
 
+New here? Start with the [root README](../README.md) for the project elevator pitch and the canonical end-to-end architecture diagram, or jump to [Architecture Overview](ARCHITECTURE.md) below for the layer-by-layer design rationale.
+
 ## 📚 Core Documentation
 
 - [**Architecture Overview**](ARCHITECTURE.md)  
@@ -40,5 +42,5 @@ The project follows a Medallion Architecture. The data models for each layer are
   How the OHLCV Silver pipeline decides whether a row passes, is quarantined, or halts the pipeline — row-level `expect_or_fail` (schema contract) vs. WAP quarantine vs. the aggregate `wap_audit_log_hc` quality gate.
 - [**Quarantine Queries**](QUARANTINE_QUERIES.md)  
   How to inspect rejected/invalid records captured by the WAP pattern — Silver quarantine tables, Bronze dead-letter queue, and audit log queries.
-- [**Orphan Symbol Check**](ORPHAN_SYMBOL_CHECK.md)  
-  Read-only SQL checks to measure orphan symbols (fact rows with no matching `dim_ticker_hc` row) and track the rate against a baseline.
+- [**Dimension-Miss Symbol Check**](DIMENSION_MISS_CHECK.md)  
+  Read-only SQL checks to measure dimension-miss symbols (fact rows with no matching `dim_ticker_hc` row) and track the rate against a baseline.

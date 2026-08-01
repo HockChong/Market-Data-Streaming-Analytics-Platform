@@ -53,8 +53,8 @@ BRONZE_TICKER_DETAILS_PATH = _config.get_bronze_path("ticker_details")
 )
 @dlt.expect_all_or_fail({"valid_symbol": "symbol IS NOT NULL AND LENGTH(symbol) >= 1 AND LENGTH(symbol) <= 8"})
 # Keep (don't drop) null-exchange rows: delisted names enriched into Bronze may
-# lack primary_exchange, and dropping them would re-orphan the very tickers we add
-# to fix survivorship bias. Violations are still logged in the DLT event log.
+# lack primary_exchange, and dropping them would re-create a dimension-miss for the
+# very tickers we add to fix survivorship bias. Violations are still logged in the DLT event log.
 @dlt.expect_all({"valid_exchange": "exchange IS NOT NULL"})
 @dlt.expect_all({"has_company_name": "company_name IS NOT NULL"})
 @dlt.expect_all({"is_active_known": "is_active IS NOT NULL"})

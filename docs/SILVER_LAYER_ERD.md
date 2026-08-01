@@ -1,6 +1,6 @@
 # Silver Layer Entity Relationship Diagram (ERD)
 
-This document contains the conceptual Entity Relationship Diagram for the Silver Layer. The Silver Layer contains cleaned, conformed, and enriched data, along with various derived quality metrics and aggregations.
+This document contains the conceptual Entity Relationship Diagram for the Silver Layer. The Silver Layer contains cleaned, conformed, and enriched data, along with various derived quality metrics and aggregations. Quarantine and audit tables (`ohlcv_silver_quarantine_hc`, `news_silver_quarantine_hc`, `wap_audit_log_hc`) implement the **WAP (Write-Audit-Publish)** pattern: invalid records are excluded from the main table but preserved with a rejection reason for audit, rather than silently dropped.
 
 **Daily OHLCV (`ohlcv_daily_silver_hc`):** materialized view aggregating minute Silver to one row per `(symbol, date)` via a pure `groupBy` (`min`/`max`/`sum`). On serverless the engine refreshes it incrementally — recomputing only changed `(symbol, date)` groups, with full recompute as fallback. DLT runs the minute MERGE before the daily MV refreshes in the same pipeline update (Layer 3 in-pipeline ordering).
 
@@ -20,8 +20,8 @@ erDiagram
         double close
         bigint volume
         string source "polygon_flatfiles_s3, polygon_kafka_delayed_streaming, or polygon_rest_backfill"
-        timestamp ingestion_timestamp "Bronze ingest time; used as dedup tiebreaker"
-        string ts_unit "Epoch unit: s, ms, or ns"
+        bigint ingestion_timestamp "Bronze ingest time (epoch seconds for streaming/REST sources, cast from Bronze TIMESTAMP for flat files); used as dedup tiebreaker (databricks/utils/ohlcv_dedup_spark.py:36-41)"
+        string ts_unit "Epoch unit stamped by producer; always 'ms', enforced by expect_or_fail(known_ts_unit)"
         int source_priority "2=historical (preferred), 1=streaming, 0=other (e.g. REST backfill)"
         date date "ET trading date, partition key"
         timestamp source_event_time "Original event_time used for watermarking"
@@ -36,10 +36,10 @@ erDiagram
         double low
         double close
         bigint volume
-        string source
+        string source "PK part 3 (dedup window: symbol, start_timestamp, source)"
         boolean otc "Over-the-counter flag (preserved from Bronze)"
         timestamp ingestion_timestamp
-        string ts_unit "Epoch unit: s, ms, or ns"
+        string ts_unit "Epoch unit stamped by producer; always 'ms'"
         string rejection_reason "ZORDER column: invalid_price_positive, invalid_ohlc_logic, invalid_volume"
         date date "Partition key"
         timestamp quarantined_at
@@ -148,7 +148,8 @@ erDiagram
 
     %% OHLCV relationships
     ohlcv_silver_hc }o--|| ohlcv_daily_silver_hc : "daily MV: groupBy (symbol, date)"
+    ohlcv_silver_hc |o..o| ohlcv_silver_quarantine_hc : "same source (bronze_unified_hc), disjoint populations - not a per-row key relationship"
 
     %% News relationships
-    news_silver_hc ||--o| news_silver_quarantine_hc : "rejected records"
+    news_silver_hc |o..o| news_silver_quarantine_hc : "same source (bronze_news_source_hc), disjoint populations - not a per-row key relationship"
 ```

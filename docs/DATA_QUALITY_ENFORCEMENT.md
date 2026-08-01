@@ -8,7 +8,7 @@ and look alike, but they judge different units and guard against different failu
 | Mechanism | Unit of judgment | What it catches | On violation | Threshold configured in |
 |-----------|------------------|-----------------|--------------|--------------------------|
 | Row-level `expect_or_fail` | a single record | structurally impossible rows | **halt** immediately | n/a — boolean predicates |
-| WAP quarantine | a single record | bad-but-well-formed values | **excluded** from Silver, **copied** to quarantine with a reason | [`silver_config.py:103-107`](../databricks/config/silver_config.py#L103-L107) |
+| WAP (Write-Audit-Publish) quarantine | a single record | bad-but-well-formed values | **excluded** from Silver, **copied** to quarantine with a reason | [`silver_config.py:103-107`](../databricks/config/silver_config.py#L103-L107) |
 | Aggregate gate (`wap_audit_log_hc`) | a whole day's rejection *rate* | quality *drift* in bulk | **halt** if the rate reaches **1.0%** | [`base_config.py:100-101`](../databricks/config/base_config.py#L100-L101) |
 
 In one line: **`expect_or_fail` enforces the schema contract (fail-fast on impossible
@@ -21,7 +21,7 @@ a bad trend).**
 ## 1. Row-level `expect_or_fail` — the schema contract
 
 On the enriched intermediate table at
-[`ohlcv_silver_dlt.py:349-360`](../databricks/silver/ohlcv_silver_dlt.py#L349-L360):
+[`ohlcv_silver_dlt.py:352-363`](../databricks/silver/ohlcv_silver_dlt.py#L352-L363):
 
 ```python
 @dlt.expect_or_fail("valid_timestamps", "start_timestamp < end_timestamp")
@@ -59,8 +59,8 @@ of the same Bronze source sharing one predicate**:
 
 | Path | Read | Scope | Where |
 |---|---|---|---|
-| Silver production | `dlt.read_stream("bronze_unified_hc")`, keeps rows where all rules pass | streaming, unbounded | [`ohlcv_silver_dlt.py:367-372`](../databricks/silver/ohlcv_silver_dlt.py#L367-L372) |
-| Quarantine | `dlt.read("bronze_unified_hc")`, keeps rows where any rule fails | **batch, rolling 30 days** | [`ohlcv_silver_dlt.py:497-504`](../databricks/silver/ohlcv_silver_dlt.py#L497-L504) |
+| Silver production | `dlt.read_stream("bronze_unified_hc")`, keeps rows where all rules pass | streaming, unbounded | [`ohlcv_silver_dlt.py:370-375`](../databricks/silver/ohlcv_silver_dlt.py#L370-L375) |
+| Quarantine | `dlt.read("bronze_unified_hc")`, keeps rows where any rule fails | **batch, rolling 30 days** | [`ohlcv_silver_dlt.py:500-507`](../databricks/silver/ohlcv_silver_dlt.py#L500-L507) |
 
 Both derive their predicate from the same `WAP_VALIDATION_RULES` dict, so the two paths
 cannot drift apart on *what* counts as invalid.
@@ -98,7 +98,7 @@ Quarantine is the pile of rejected rows. The next layer turns that pile into a *
 
 `wap_audit_log_hc` produces **one row per trading day** summarizing valid vs. rejected
 counts and a `rejection_rate_pct`, then carries its own `expect_or_fail` at
-[`ohlcv_silver_dlt.py:548-556`](../databricks/silver/ohlcv_silver_dlt.py#L548-L556):
+[`ohlcv_silver_dlt.py:551-559`](../databricks/silver/ohlcv_silver_dlt.py#L551-L559):
 
 ```python
 @dlt.expect_or_fail(
@@ -118,7 +118,7 @@ counts and a `rejection_rate_pct`, then carries its own `expect_or_fail` at
 ### The rate is computed at a single grain — deliberately
 
 Both the numerator and the denominator come from the *same pre-dedup Bronze scan*
-([`ohlcv_silver_dlt.py:574-586`](../databricks/silver/ohlcv_silver_dlt.py#L574-L586)):
+([`ohlcv_silver_dlt.py:582-591`](../databricks/silver/ohlcv_silver_dlt.py#L582-L591)):
 
 ```python
 counts = aggregate_bronze_wap_counts_by_date(bronze_df, WAP_VALIDATION_RULES)
@@ -149,7 +149,7 @@ does mean the gate protects *freshness of detection*, not history.
 ### Companion: the warn-only completeness signal
 
 The same table carries a non-halting `@dlt.expect` at
-[`ohlcv_silver_dlt.py:562-565`](../databricks/silver/ohlcv_silver_dlt.py#L562-L565):
+[`ohlcv_silver_dlt.py:565-568`](../databricks/silver/ohlcv_silver_dlt.py#L565-L568):
 
 ```python
 @dlt.expect(
@@ -163,7 +163,7 @@ The same table carries a non-halting `@dlt.expect` at
 normal session, ~210 on an early-close half-day. If even the busiest symbol barely traded,
 that is a market-wide ingestion gap rather than a per-symbol problem. The floor is derived,
 not hardcoded: `EXPECTED_BARS_PER_DAY * 0.5` = **195**
-([`ohlcv_silver_dlt.py:170`](../databricks/silver/ohlcv_silver_dlt.py#L170)), which sits
+([`ohlcv_silver_dlt.py:173`](../databricks/silver/ohlcv_silver_dlt.py#L173)), which sits
 below the ~210 of a half-day so early closes don't false-trip it.
 
 It reads deduped Silver rather than pre-dedup Bronze on purpose: a replay against Bronze
@@ -206,10 +206,10 @@ and aggregate gate are what catch that class. You need all three.
 ## Note: what the streaming watermark actually does
 
 The `.withWatermark(...)` call on the Bronze streams
-([`ohlcv_silver_dlt.py:156`](../databricks/silver/ohlcv_silver_dlt.py#L156)) looks like it
+([`ohlcv_silver_dlt.py:159`](../databricks/silver/ohlcv_silver_dlt.py#L159)) looks like it
 prevents duplicates — it doesn't. That's handled by `apply_changes`, which always keeps the
 right row via `sequence_by="_dedup_sequence"`
-([`ohlcv_silver_dlt.py:439`](../databricks/silver/ohlcv_silver_dlt.py#L439)), no matter how
+([`ohlcv_silver_dlt.py:442`](../databricks/silver/ohlcv_silver_dlt.py#L442)), no matter how
 late it arrives.
 
 The watermark only tells Databricks it can stop tracking a row once nothing has updated it
@@ -226,7 +226,7 @@ would grow unbounded over the pipeline's life.
   are all still there — the halt costs you a pipeline run, not data.
 - **How to recover:** fix the upstream cause, then rerun. The rerun is idempotent by
   design: Silver upserts on `(symbol, start_timestamp)` via `apply_changes`
-  ([`ohlcv_silver_dlt.py:435-445`](../databricks/silver/ohlcv_silver_dlt.py#L435-L445)),
+  ([`ohlcv_silver_dlt.py:438-448`](../databricks/silver/ohlcv_silver_dlt.py#L438-L448)),
   so replayed rows converge onto the same keys instead of duplicating. This is the same
   property that lets Kafka be treated as at-least-once.
 - **How to triage:** start with the daily rate in `wap_audit_log_hc` to see *when* it

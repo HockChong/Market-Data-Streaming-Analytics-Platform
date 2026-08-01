@@ -1,6 +1,14 @@
 # Data Dictionary - Market Data Platform
 ## Bronze, Silver, and Gold Layer Schemas
 
+This is the column-level schema reference for every table in the [Bronze → Silver → Gold](ARCHITECTURE.md)
+medallion pipeline — types, nullability, quality checks, and partitioning. For diagrams, see the
+[Bronze](BRONZE_LAYER_ERD.md), [Silver](SILVER_LAYER_ERD.md), and [Gold](GOLD_LAYER_ERD.md) ERDs.
+
+Silver tables implement the **WAP (Write-Audit-Publish)** pattern: DLT (Databricks Delta Live
+Tables) pipelines validate each record, publish valid rows to the main table, and route invalid
+rows to a quarantine table with a `rejection_reason` instead of dropping them silently.
+
 ---
 
 ## BRONZE LAYER (Raw Data)
@@ -182,11 +190,13 @@
 | `date` | DATE | NO | ET trading date (partition key) |
 | `source_event_time` | TIMESTAMP | YES | Original event time (renamed from watermark column) |
 
+**Grain**: One row per (symbol, start_timestamp), deduplicated by `apply_changes` MERGE
+
 **Quality Checks Applied**:
 - `expect_or_fail`: `valid_timestamps` (start_timestamp < end_timestamp), `valid_start_timestamp` (start_timestamp > 0), `required_fields` (symbol/start_timestamp/source IS NOT NULL), `known_ts_unit` (ts_unit = 'ms')
 - WAP filter (quarantine): positive prices, valid OHLC logic, non-negative volume
 - Deduplication: `apply_changes` MERGE on (symbol, start_timestamp) with source_priority sequence (flat-file wins)
-- Market hours filter: only regular trading hours (9:30 AM - 4:00 PM ET)
+- Market hours filter: regular trading hours only — NYSE session close per trading day (4:00 PM ET normally, 1:00 PM ET on early-close days such as July 3 or the day before Thanksgiving), via the `exchange_calendars` NYSE calendar; falls back to a static 9:30 AM–4:00 PM ET cutoff if `exchange_calendars` is unavailable
 
 ---
 
@@ -210,12 +220,14 @@
 | `source` | STRING | YES | Data source identifier |
 | `otc` | BOOLEAN | YES | Over-the-counter indicator |
 | `ingestion_timestamp` | BIGINT | YES | Bronze ingest time (epoch ms, cast to long at Bronze read) |
-| `ts_unit` | STRING | YES | Epoch unit: s, ms, or ns |
+| `ts_unit` | STRING | YES | Epoch unit stamped by producer (always "ms") |
 | `rejection_reason` | STRING | NO | Why the record was rejected (ZORDER column) |
 | `date` | DATE | NO | Date (Eastern Time, partition key) |
 | `quarantined_at` | TIMESTAMP | NO | When the record was quarantined |
 
 **Rejection Reasons**: `invalid_price_positive`, `invalid_ohlc_logic`, `invalid_volume`
+
+**Grain**: One row per (symbol, start_timestamp, source) — the surviving version of a rejected record, deduped by content hash (see [SILVER_LAYER_ERD.md](SILVER_LAYER_ERD.md))
 
 ---
 
@@ -248,6 +260,8 @@
 - **Structural checks only.** The three rules (`invalid_price_positive`, `invalid_ohlc_logic`, `invalid_volume`) validate a bar's internal shape — positive prices and OHLC ordering. They do **not** detect inter-bar problems: price spikes / fat-fingers, stale or frozen prints, trading halts, or unadjusted splits. `valid_volume` is a floor check (`volume >= 0`) only, so it effectively never rejects and zero-volume bars pass.
 - **NULL OHLCV cannot occur here.** `open`/`high`/`low`/`close`/`volume` are non-nullable in the Avro contract (`schemas/avro/ohlcv_aggregate.avsc`); a record missing them fails deserialization and lands in the Bronze dead-letter quarantine, never reaching this audit.
 - **A fully-empty or all-rejected trading day is invisible.** Rows exist only for dates with ≥1 Bronze row, so a zero-data day produces no row to fail and its `session_bars` would be NULL (exempt). Catching "a trading day with no usable data" would require a trading calendar (intentionally out of scope) — watch for a missing `audit_date` on a known trading day.
+
+**Grain**: One row per trading day (`audit_date`)
 
 ---
 
@@ -291,6 +305,8 @@
 | `tickers_count` | INT | NO | Number of associated tickers |
 | `silver_processing_timestamp` | TIMESTAMP | NO | Silver processing timestamp |
 
+**Grain**: One row per article (`article_id`), deduplicated by `apply_changes` MERGE
+
 **Quality Checks Applied**:
 - `expect_or_fail`: article_id IS NOT NULL, published_utc IS NOT NULL
 - WAP filter (quarantine): title non-empty (after trim), URL starts with 'http', published <= ingestion
@@ -314,6 +330,8 @@ All Bronze news columns are preserved, plus:
 | `quarantined_at` | TIMESTAMP | NO | When the record was quarantined |
 
 **Rejection Reasons**: `invalid_title`, `invalid_url`, `invalid_timestamp_order`
+
+**Grain**: One row per article (`article_id`) — deduped by content hash, same shape as `ohlcv_silver_quarantine_hc`'s dedup
 
 ---
 
@@ -346,9 +364,9 @@ as the cost-based fallback. There is no dirty-date logic, staging table, or `app
 the MV reads the full minute Silver table (no `current_date()` predicate) so the query stays
 deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAILY_ROLLUP_DESIGN.md)`.
 
-**Orchestration (Layer 3):** DLT completes the `ohlcv_silver_hc` minute MERGE before the daily MV refreshes in the same update. Gold runs in a separate pipeline after Silver succeeds.
+**Orchestration (Layer 3):** DLT completes the `ohlcv_silver_hc` minute MERGE before the daily MV refreshes in the same update. Gold runs as its own continuous pipeline in parallel with Silver, not after it — it reads Silver via `spark.read.table`, so it naturally lags by whatever its own cycle takes to pick up the change.
 
-**Intraday behavior:** when Silver triggers every 5 minutes during market hours, today's row is a *rolling snapshot* (open fixed at session start, close/volume grow until session end).
+**Intraday behavior:** Silver runs as a **continuous** pipeline (started/stopped by Jobs at 9:30 AM/5:00 PM ET, not a fixed trigger cron) during market hours, so today's row is a *rolling snapshot* (open fixed at session start, close/volume grow until session end).
 
 **Deploy note:** a streaming table cannot become a materialized view in place — drop the existing `ohlcv_daily_silver_hc` once before the first run materializes it as an MV. That first run is a full recompute; subsequent runs are incremental.
 
@@ -398,7 +416,7 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 | `type` | STRING | YES | Security type (CS=Common Stock, ETF, ADRC, etc.) |
 | `sector` | STRING | YES | Business sector (Technology, Healthcare, etc.) |
 | `industry` | STRING | YES | SIC industry description |
-| `exchange` | STRING | YES | Primary exchange (NYSE, NASDAQ, ARCX, etc.); may be null for delisted names (kept, not dropped — see Quality Checks) |
+| `exchange` | STRING | YES | Primary exchange MIC code, passthrough of Bronze `primary_exchange` (XNYS, XNAS, etc.); may be null for delisted names (kept, not dropped — see Quality Checks) |
 | `market_cap_category` | STRING | YES | Size classification (Mega/Large/Mid/Small/Micro/Nano Cap; Unknown if market cap is null) |
 | `is_active` | BOOLEAN | YES | Currently trading status (`false` = delisted/inactive, retained for survivorship-free history) |
 | `list_date` | DATE | YES | IPO / listing date (nullable) |
@@ -454,7 +472,7 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 | `close` | DOUBLE | YES | Last minute's close price |
 | `volume` | BIGINT | YES | Total daily volume |
 | `processing_timestamp` | TIMESTAMP | NO | When this Gold row was written |
-| `correlation_id` | STRING | NO | One UUID per DLT pipeline execution |
+| `correlation_id` | STRING | NO | One UUID per table-build (minted at pipeline module load); shared with `fact_daily_market_adjusted_hc`, which inherits it |
 
 **Quality Checks**:
 - `expect_or_fail`: symbol IS NOT NULL, date IS NOT NULL
@@ -481,7 +499,7 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 | `close` | DOUBLE | YES | Raw closing price |
 | `volume` | BIGINT | YES | Raw daily volume |
 | `processing_timestamp` | TIMESTAMP | NO | When this Gold row was written |
-| `correlation_id` | STRING | NO | One UUID per DLT pipeline execution (inherited from raw fact) |
+| `correlation_id` | STRING | NO | Inherited from `fact_daily_market_hc`'s UUID (not a new UUID per run) |
 | `adj_open` | DOUBLE | YES | Split-adjusted opening price (`open * price_factor`) |
 | `adj_high` | DOUBLE | YES | Split-adjusted high price |
 | `adj_low` | DOUBLE | YES | Split-adjusted low price |
@@ -525,14 +543,14 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 | `close` | DOUBLE | YES | Bar closing price |
 | `volume` | BIGINT | YES | Volume traded in this bar |
 | `processing_timestamp` | TIMESTAMP | NO | When this Gold row was written |
-| `correlation_id` | STRING | NO | One UUID per DLT pipeline execution |
+| `correlation_id` | STRING | NO | One UUID per table-build (minted at pipeline module load); shared with `fact_minute_market_adjusted_hc`, which inherits it |
 
 **Quality Checks**:
 - `expect_or_fail`: symbol IS NOT NULL, start_timestamp IS NOT NULL
 - OHLC validity enforced at Silver via `ohlcv_silver_quarantine_hc`
 
-**Grain**: One row per (symbol, start_timestamp) — 390 bars/day during market hours (9:30–16:00 ET)
-**Filter applied**: Silver pipeline filters to `[9:30 AM, 4:00 PM)` ET before MERGE — pre-market and after-hours bars excluded
+**Grain**: One row per (symbol, start_timestamp) — 390 bars/day on a normal session, fewer on NYSE early-close days
+**Filter applied**: Silver pipeline filters to the NYSE session window before MERGE — 9:30 AM to the day's actual close (4:00 PM ET normally, 1:00 PM ET on early-close days) via `exchange_calendars`; pre-market and after-hours bars excluded
 
 ---
 
@@ -554,7 +572,7 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 | `close` | DOUBLE | YES | Raw bar closing price |
 | `volume` | BIGINT | YES | Raw volume traded in this bar |
 | `processing_timestamp` | TIMESTAMP | NO | When this Gold row was written (inherited from raw fact) |
-| `correlation_id` | STRING | NO | One UUID per DLT pipeline execution (inherited from raw fact) |
+| `correlation_id` | STRING | NO | Inherited from `fact_minute_market_hc`'s UUID (not a new UUID per run) |
 | `adj_open` | DOUBLE | YES | Split-adjusted opening price (`open * price_factor`) |
 | `adj_high` | DOUBLE | YES | Split-adjusted high price |
 | `adj_low` | DOUBLE | YES | Split-adjusted low price |
@@ -591,7 +609,7 @@ deterministic and incrementally maintainable. See `[DAILY_ROLLUP_DESIGN.md](DAIL
 | `publisher_name` | STRING | YES | News source |
 | `author` | STRING | YES | Article author |
 | `processing_timestamp` | TIMESTAMP | NO | When this Gold row was written |
-| `correlation_id` | STRING | NO | One UUID per DLT pipeline execution |
+| `correlation_id` | STRING | NO | One UUID per table-build (minted at pipeline module load); independent of other Gold fact tables' UUIDs |
 
 **Quality Checks**:
 - `expect_or_fail`: article_id IS NOT NULL

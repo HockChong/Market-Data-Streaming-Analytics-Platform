@@ -179,7 +179,7 @@ except Exception as e:
 # MAGIC ## 5b. Add Delisted Symbols Present in Our OHLCV History
 # MAGIC
 # MAGIC The active-only list omits delisted/renamed names. Any such symbol still in our
-# MAGIC Bronze OHLCV history becomes an orphan in `dim_ticker_hc` (price rows with no
+# MAGIC Bronze OHLCV history becomes a dimension-miss against `dim_ticker_hc` (price rows with no
 # MAGIC ticker row), silently dropping from INNER joins and biasing historical sector/
 # MAGIC return rollups (survivorship bias). We bound the extra fetch to symbols we
 # MAGIC actually have price data for and let the existing detail loop enrich them.

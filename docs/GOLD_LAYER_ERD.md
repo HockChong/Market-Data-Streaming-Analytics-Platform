@@ -58,7 +58,7 @@ erDiagram
         double close
         bigint volume
         timestamp processing_timestamp
-        string correlation_id "One UUID per DLT pipeline execution"
+        string correlation_id "One UUID per table-build (minted at pipeline module load); shared with fact_daily_market_adjusted_hc, which inherits it"
     }
 
     fact_daily_market_adjusted_hc {
@@ -70,7 +70,7 @@ erDiagram
         double close
         bigint volume
         timestamp processing_timestamp
-        string correlation_id "One UUID per DLT pipeline execution"
+        string correlation_id "Inherited from fact_daily_market_hc's UUID (not a new UUID per run)"
         double adj_open "Split-adjusted OHLCV"
         double adj_high
         double adj_low
@@ -96,7 +96,7 @@ erDiagram
         double close
         bigint volume
         timestamp processing_timestamp
-        string correlation_id "One UUID per DLT pipeline execution"
+        string correlation_id "One UUID per table-build (minted at pipeline module load); shared with fact_minute_market_adjusted_hc, which inherits it"
     }
 
     fact_minute_market_adjusted_hc {
@@ -109,7 +109,7 @@ erDiagram
         double close
         bigint volume
         timestamp processing_timestamp
-        string correlation_id "One UUID per DLT pipeline execution"
+        string correlation_id "Inherited from fact_minute_market_hc's UUID (not a new UUID per run)"
         double adj_open "Split-adjusted OHLCV"
         double adj_high
         double adj_low
@@ -129,7 +129,7 @@ erDiagram
         string publisher_name
         string author
         timestamp processing_timestamp
-        string correlation_id "One UUID per DLT pipeline execution"
+        string correlation_id "One UUID per table-build (minted at pipeline module load); independent of other Gold fact tables' UUIDs"
     }
 
     %% =========================================================
@@ -170,8 +170,8 @@ erDiagram
   rather than dropping them. So a fact row for a name that delisted within the 400-day
   window still matches a `dim_ticker_hc` row — it is no longer silently excluded from
   inner-joined results.
-- **Residual orphans are expected and bounded.** Symbols a fact references but the
-  dimension still lacks are now mostly **news-only** tickers (ETFs, foreign/ADR names
+- **Residual dimension-misses are expected and bounded.** Symbols a fact references but
+  the dimension still lacks are now mostly **news-only** tickers (ETFs, foreign/ADR names
   in `fact_news_hc` that never appear in OHLCV) and names outside the bounded pull.
-  Measure the rate with [ORPHAN_SYMBOL_CHECK.md](ORPHAN_SYMBOL_CHECK.md); use a
+  Measure the rate with [DIMENSION_MISS_CHECK.md](DIMENSION_MISS_CHECK.md); use a
   `LEFT JOIN` to `dim_ticker_hc` when a query must retain every fact row.

@@ -1,9 +1,9 @@
 # Daily OHLCV Rollup — Design Rationale
 
 This document explains **why** the daily OHLCV rollup is built the way it is. For the
-table schema see `[DATA_DICTIONARY.md](DATA_DICTIONARY.md)`; for end-to-end lineage and
-scheduling see `[DATA_LINEAGE.md](DATA_LINEAGE.md)`. All references below are grounded in
-`[databricks/silver/ohlcv_silver_dlt.py](../databricks/silver/ohlcv_silver_dlt.py)`.
+table schema see [DATA_DICTIONARY.md](DATA_DICTIONARY.md); for end-to-end lineage and
+scheduling see [DATA_LINEAGE.md](DATA_LINEAGE.md). All references below are grounded in
+[databricks/silver/ohlcv_silver_dlt.py](../databricks/silver/ohlcv_silver_dlt.py).
 
 ## The problem it solves
 
@@ -37,12 +37,20 @@ A batch aggregation over the **complete set of minute bars for a date** (`dlt.re
 recomputes a correct daily bar no matter how late the data arrived. The MV re-derives the
 daily grain from the current minute snapshot each refresh — correctness over cleverness.
 
+**What this means for today's row:** until the session closes, today's `(symbol, date)` row
+is a correct but incomplete snapshot — open is fixed from the session's first bar, while
+close and volume keep growing as new minute bars land, refresh over refresh. This is
+expected, not a bug: it's the same "re-derive from the current snapshot" behavior applied to
+a day that isn't finished yet. See the intraday-behavior note in
+[DATA_DICTIONARY.md](DATA_DICTIONARY.md) for the consumer-facing description.
+
 ## How it stays cheap on serverless (incremental refresh)
 
 Re-aggregating all ~420M minute rows on every trigger would be wasteful. On this
-**serverless** pipeline, the engine (Enzyme) refreshes the MV **incrementally**: because the
+**serverless** pipeline, the engine (Enzyme — Databricks' incremental materialized-view
+refresh engine) refreshes the MV **incrementally**: because the
 query is a pure `groupBy(symbol, date)` of associative aggregates (`min` / `max` / `sum`,
-see `[aggregation_utils.py](../databricks/utils/aggregation_utils.py)`), it can recompute
+see [aggregation_utils.py](../databricks/utils/aggregation_utils.py)), it can recompute
 only the `(symbol, date)` groups whose underlying minute rows changed, rather than scanning
 the whole table.
 
