@@ -24,8 +24,8 @@ All tables live in `tabular.dataexpert` (Unity Catalog).
   delisted/renamed names still referenced by our OHLCV history (`is_active=false`, and
   null-exchange rows are kept), so delisted names within the fact window are no longer dropped
   by inner joins — this removes the survivorship bias that an active-only universe would cause.
-  Residual orphans are mostly **news-only** symbols (ETFs, foreign/ADR tickers in `fact_news_hc`
-  that never appear in OHLCV); measure the rate with [ORPHAN_SYMBOL_CHECK.md](ORPHAN_SYMBOL_CHECK.md).
+  Residual dimension-misses are mostly **news-only** symbols (ETFs, foreign/ADR tickers in `fact_news_hc`
+  that never appear in OHLCV); measure the rate with [DIMENSION_MISS_CHECK.md](DIMENSION_MISS_CHECK.md).
   Attributes remain current-state (Type 1) — point-in-time classification is not yet modelled.
 - **Returns are split-adjusted, price-return only:** Q1–Q8 compute returns from `adj_close` /
   `prev_adj_close` on `fact_daily_market_adjusted_hc`, so stock splits no longer produce

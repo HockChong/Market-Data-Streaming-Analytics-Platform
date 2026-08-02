@@ -3,8 +3,7 @@
 How to inspect rejected / invalid records captured by the WAP (Write-Audit-Publish)
 pattern. Quarantine exists in **two places**:
 
-- **Silver** — Unity Catalog tables (`ohlcv_silver_quarantine_hc`, `news_silver_quarantine_hc`)
-  plus the `wap_audit_log_hc` quality-rate table.
+- **Silver** — Unity Catalog tables (`ohlcv_silver_quarantine_hc`, `news_silver_quarantine_hc`) plus the `wap_audit_log_hc` quality-rate table.
 - **Bronze** — a path-based Delta table for Avro deserialization failures.
 
 **Gold has no quarantine** — OHLC and news validity is enforced upstream at Silver, so
@@ -26,7 +25,7 @@ editor or notebook.
 
 ### OHLCV rejected rows
 
-Defined in [ohlcv_silver_dlt.py:449](../databricks/silver/ohlcv_silver_dlt.py#L449).
+Defined in [ohlcv_silver_dlt.py:455](../databricks/silver/ohlcv_silver_dlt.py#L455).
 Partitioned by `date`, with `(symbol, rejection_reason)` as ZORDER columns.
 
 ```sql
@@ -46,7 +45,18 @@ ORDER BY date DESC, rejected DESC;
 Valid `rejection_reason` values: `invalid_price_positive`, `invalid_ohlc_logic`,
 `invalid_volume`. These are **structural** checks (positive prices, OHLC ordering, a
 `volume >= 0` floor) — they do not flag price spikes, stale prints, halts, or
-zero-volume bars.
+zero-volume bars. The code also has an `unknown` fallback branch
+([`ohlcv_quarantine_spark.py:47`](../databricks/utils/ohlcv_quarantine_spark.py#L47)) for
+rows that reach quarantine without matching any of the three; it should not appear in
+practice — a row only lands in quarantine once at least one rule definitively fails.
+
+> **Example output (2026-08-01):** both queries above returned 0 rows. This is expected
+> for a healthy pipeline — it means no ingested OHLCV row has failed a structural check
+> since the table was created, not that the query is broken. A non-empty result is the
+> signal worth investigating; check `wap_audit_log_hc` (below) first to confirm whether
+> the rejection rate is actually non-zero before assuming a query issue.
+
+![Rejection breakdown query returning no rows](screenshots/ohlcv_quarantine_query_no_rows.png)
 
 > **Note:** `COUNT(*)` on this table (deduped — one row per `symbol` + `start_timestamp`
 > + `source`) does **not** equal `rejected_count` in `wap_audit_log_hc`, which is a raw
@@ -55,7 +65,7 @@ zero-volume bars.
 
 ### News rejected rows
 
-Defined in [news_silver_dlt.py:246](../databricks/silver/news_silver_dlt.py#L246).
+Defined in [news_silver_dlt.py:262](../databricks/silver/news_silver_dlt.py#L262).
 
 ```sql
 SELECT *
@@ -66,7 +76,7 @@ LIMIT 100;
 
 ### Quality audit (rejection rate, not raw rows)
 
-Defined in [ohlcv_silver_dlt.py:519](../databricks/silver/ohlcv_silver_dlt.py#L519).
+Defined in [ohlcv_silver_dlt.py:525](../databricks/silver/ohlcv_silver_dlt.py#L525).
 Check this **first** to answer "did quarantine spike?" — both the numerator
 (rejected) and denominator (total) read from pre-dedup Bronze, so Kafka replay does
 not skew the rate.
@@ -118,7 +128,7 @@ inverse of the expectation predicate to the table, or (b) read the pass/fail cou
 DLT event log.
 
 The main example is `no_unexplained_gap` on `fact_daily_market_adjusted_hc`
-([dim_split_dlt.py:106-109](../databricks/gold/dim_split_dlt.py#L106-L109)): it warns when a
+([dim_split_dlt.py:113-116](../databricks/gold/dim_split_dlt.py#L113-L116)): it warns when a
 day-over-day move on `adj_close` is ≥ 40% with no split to explain it — usually a missing
 split in `dim_split_hc`. (`dim_ticker_hc` also carries warn-only `@dlt.expect_all` rules —
 `valid_exchange`, `has_company_name`, `is_active_known` at
@@ -182,3 +192,4 @@ across runs.
 | Silver | `tabular.dataexpert.wap_audit_log_hc`                                              | Table name    | Daily rejection rate + quality-gate flags      |
 | Bronze | `/Volumes/tabular/dataexpert/hc_market_data/bronze/streaming_quarantine`          | `delta.` path | Avro deserialization failures (dead letters)   |
 | Gold   | `tabular.dataexpert.fact_daily_market_adjusted_hc` (no quarantine table)           | Inverse predicate / `event_log()` | Warn-only flagged rows kept in place (e.g. `no_unexplained_gap`) |
+| Gold   | `tabular.dataexpert.dim_ticker_hc` (no quarantine table)                           | Inverse predicate / `event_log()` | Warn-only flagged rows kept in place (`valid_exchange`, `has_company_name`, `is_active_known`) |

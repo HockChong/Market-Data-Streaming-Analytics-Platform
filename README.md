@@ -89,7 +89,18 @@ Three layers of defense, by failure severity ([docs/DATA_QUALITY_ENFORCEMENT.md]
 2. **Row-level WAP quarantine** — business-rule failures are diverted with a rejection reason, never silently dropped.
 3. **Aggregate gate** — a daily audit log computes the rejection rate and fails the run past a critical threshold, plus a warn-only session-completeness check.
 
-The pytest suite (50 tests) includes real-SparkSession integration tests covering the dedup tiebreaker, quarantine reason precedence, quality-gate thresholds, and minute-to-daily aggregation ([tests/test_integration_spark.py](tests/test_integration_spark.py)). CI gates every push: `ruff check`, `ruff format --check`, `pytest --cov`, and Avro schema validation ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+The pytest suite (50 tests) is split by [pytest marker](pyproject.toml) — `unit` tests import production code against a mocked PySpark ([tests/conftest.py](tests/conftest.py)) for fast, Java-free feedback; `integration` tests call `ensure_real_pyspark()` and run against a local SparkSession, so they need Java 11:
+
+| File | Marker(s) | Covers |
+|---|---|---|
+| [test_avro_contract.py](tests/test_avro_contract.py) | `unit`, `contract` | Streaming producer output keys match the Avro schema field set; optional fields are nullable with an explicit `default: null`. |
+| [test_streaming_transforms.py](tests/test_streaming_transforms.py) | `unit` | Polygon WebSocket message → Avro dict mapping, optional-field zero-sentinel handling, and the epoch-millis `ingestion_timestamp` used as the Silver dedup tiebreaker. |
+| [test_rest_aggs_backfill_runtime.py](tests/test_rest_aggs_backfill_runtime.py) | `unit` + `integration` | Unit: ticker CSV parsing, DST-aware market-window→epoch-ms conversion, REST agg→Bronze row mapping. Integration: REST backfill rows aligned to the Bronze streaming schema (typed nulls, extra-column rejection). |
+| [test_daily_metrics_spark.py](tests/test_daily_metrics_spark.py) | `integration` | Rolling lag-close/`rvol_20d` window contract, per-symbol partitioning (no cross-symbol leakage), idempotent rerun. |
+| [test_split_adjust_spark.py](tests/test_split_adjust_spark.py) | `integration` | Forward/reverse stock-split price rescaling and inverse volume adjustment, idempotent rerun. |
+| [test_integration_spark.py](tests/test_integration_spark.py) | `integration` (+ `spark_integration` on Spark-heavy cases) | Minute→daily OHLCV rollup, dedup source-priority tiebreak, WAP quarantine rejection-reason precedence, WAP gate pass/warn/fail thresholds, Bronze incremental dedup idempotency. |
+
+Run `pytest -m unit` for fast local feedback with no Spark dependency, or `pytest -m integration` for the full contract suite. CI runs the whole suite via `pytest --cov`, plus `ruff check`, `ruff format --check`, and Avro schema validation ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 Schema evolution is contract-first: [schemas/avro/ohlcv_aggregate.avsc](schemas/avro/ohlcv_aggregate.avsc) is the single source of truth, new fields must be nullable with defaults, and the Schema Registry validates every message before it reaches Kafka.
 
@@ -97,7 +108,8 @@ Schema evolution is contract-first: [schemas/avro/ohlcv_aggregate.avsc](schemas/
 
 ```bash
 pip install -r requirements.txt
-pytest                  # run tests (Spark integration tests need Java 11)
+pytest -m unit           # fast feedback, no Spark/Java needed
+pytest                    # full suite incl. Spark integration tests (needs Java 11)
 ruff check . && ruff format .
 python scripts/add_secrets_rest_api.py   # push secrets to Databricks
 ```
@@ -109,5 +121,5 @@ Deep-dive documentation, including analyst-style business questions answerable f
 ## Limitations & what I'd do next
 
 - **The feed is delayed, not true real-time.** The platform uses Polygon's delayed WebSocket feed; the architecture wouldn't change for the real-time feed, but latency claims are bounded by the source.
-- **Quarantine and audit cover a rolling 30-day window**, not all history — a deliberate trade-off to keep per-run scan cost constant. Older rejections age out of the audit tables.
+- **Quarantine and audit cover a rolling 30-day window**, not all history — a deliberate trade-off to keep per-run scan cost constant. Older rejections age out of the audit tables. A next step, if a real retention requirement ever applied, would be making `wap_audit_log_hc` incremental (upsert on `audit_date`) rather than a full 30-day recompute — unbounded history without rescanning it every run. The row-level quarantine table can stay as-is, since Bronze already serves as its unbounded, immutable archive.
 - **Single environment, no staging.** A next step would be a dev/prod split with Databricks Asset Bundles and table-level permissions, plus alerting on the WAP audit gate instead of relying on pipeline failure.

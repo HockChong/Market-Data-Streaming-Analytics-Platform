@@ -146,6 +146,12 @@ SELECT * FROM delta.`/Volumes/tabular/dataexpert/hc_market_data/bronze/streaming
 2. Run all cells (no parameters needed — fetches full split history)
 3. Verify data at `/Volumes/tabular/dataexpert/hc_market_data/bronze/splits`
 
+### Test REST Aggregates Gap Backfill
+
+1. Open `bronze/rest_aggs_backfill.py` — manual/on-demand, no schedule (see Scenario 4 in Step "How to Replay Data")
+2. Leave `dry_run` = `true` and run all cells to preview row counts for the default 09:30–10:00 ET window
+3. Re-run with `dry_run` = `false` to append the fetched bars to `/Volumes/tabular/dataexpert/hc_market_data/bronze/streaming` (source = `polygon_rest_backfill`, source_priority 0 — Silver's dedup keeps live-streamed bars over these wherever both exist)
+
 ---
 
 ## Step 5: Deploy DLT Pipelines
@@ -164,7 +170,7 @@ SELECT * FROM delta.`/Volumes/tabular/dataexpert/hc_market_data/bronze/streaming
 4. Target schema: `tabular.dataexpert`
 5. Cluster: **Enhanced autoscaling**, min 1 / max 2 workers
 6. Cluster libraries: add `exchange_calendars` (required for early-close awareness)
-7. Pipeline mode: **Triggered** (see Step 6 for schedule — every 5 minutes during market hours recommended)
+7. Pipeline mode: **Continuous** — started and stopped by Jobs, not run on a fixed trigger cron (see Step 6)
 8. **Configuration** (Pipeline settings → Configuration): no daily-rollup configuration keys are required. `ohlcv_daily_silver_hc` is a materialized view that re-derives the daily grain from the full minute Silver snapshot each refresh; on serverless the engine refreshes it incrementally.
 
    **One-time migration:** if a previous deploy created `ohlcv_daily_silver_hc` as a streaming table, drop it once (`DROP TABLE tabular.dataexpert.ohlcv_daily_silver_hc`) before the first run so it can be recreated as a materialized view (a streaming table cannot be converted in place). That first run is a full recompute.
@@ -174,7 +180,7 @@ SELECT * FROM delta.`/Volumes/tabular/dataexpert/hc_market_data/bronze/streaming
 1. Create pipeline: `Silver News Pipeline`
 2. Source code: `databricks/silver/news_silver_dlt.py`
 3. Target schema: `tabular.dataexpert`
-4. Pipeline mode: **Triggered**
+4. Pipeline mode: **Continuous** — started and stopped by Jobs (see Step 6)
 
 ### Gold Pipeline
 
@@ -188,7 +194,7 @@ SELECT * FROM delta.`/Volumes/tabular/dataexpert/hc_market_data/bronze/streaming
    - `databricks/gold/dim_split_dlt.py`
 3. Target schema: `tabular.dataexpert`
 4. Cluster libraries: add `exchange_calendars`
-5. Pipeline mode: **Triggered** (run after Silver pipelines complete)
+5. Pipeline mode: **Continuous** — runs in parallel with the Silver pipelines during market hours, not triggered after them (see Step 6). Gold reads Silver via `spark.read.table`, so it naturally lags Silver's MERGE by however long its own continuous cycle takes to pick up the change.
 
 ### Add Table Constraints (One-Time)
 
@@ -242,42 +248,72 @@ After DLT pipelines have created all tables, run `databricks/setup/add_table_con
 - No schedule — run manually with `start_date` and `end_date` widgets
 - Timeout: 2–4 hours depending on date range
 
-### Job 7: Silver OHLCV DLT (Market Hours — every 5 minutes)
+### Job 7: Continuous Pipeline & Dashboard Lifecycle (Market Hours)
 
-- **Type**: Delta Live Tables pipeline trigger (not a notebook)
-- **Pipeline**: `Silver OHLCV Pipeline` (`ohlcv_silver_dlt.py`)
-- **Schedule**: `*/5 9-16 * * 1-5` (every 5 minutes, 9 AM–4 PM ET, Mon–Fri) — adjust for your timezone in the job UI
-- **Prerequisite**: Jobs 1 + 2 (Bronze streaming producer + ingestion) must be **running** during this window so Bronze Delta receives Kafka bars. Silver does not read Kafka directly.
-- **Layer 3 (in-pipeline)**: Each DLT update finishes `ohlcv_silver_hc` MERGE **before** `ohlcv_daily_silver_hc` incremental rollup in the same run — no separate daily job needed.
+The three DLT pipelines (Silver OHLCV, Silver News, Gold) run in **Continuous** mode, not on a
+trigger cron. A continuous pipeline keeps a long-running update open and reacts to new data as it
+arrives instead of being invoked per run, so "scheduling" it means starting and stopping that
+update — not firing a triggered run every few minutes. Four Databricks Jobs do this, each running
+a small notebook from `databricks/silver/jobs/` that calls the Databricks SDK
+(`WorkspaceClient.pipelines.start_update` / `.stop`, or `.apps.start` / `.stop` for the dashboard):
 
-### Job 8: Pipeline Orchestration (Gold + off-hours Silver)
+| Job | Start notebook | Stop notebook | Start schedule | Stop schedule |
+|---|---|---|---|---|
+| Silver OHLCV DLT | `ohlcv_silver_pipeline_start.py` | `ohlcv_silver_pipeline_stop.py` | 9:30 AM ET Mon–Fri | 5:00 PM ET Mon–Fri |
+| Silver News DLT | `news_silver_pipeline_start.py` | `news_silver_pipeline_stop.py` | 9:30 AM ET Mon–Fri | 5:00 PM ET Mon–Fri |
+| Gold DLT | `gold_pipeline_start.py` | `gold_pipeline_stop.py` | 9:30 AM ET Mon–Fri | 5:00 PM ET Mon–Fri |
+| Dashboard App (`market-analytics-dashboard`) | `market_analytics_app_start.py` | `market_analytics_app_stop.py` | 9:30 AM ET Mon–Fri | 5:00 PM ET Mon–Fri |
 
-**Intraday:** Job 7 runs Silver every 5 minutes while Bronze streaming is active. Today's daily bar in `ohlcv_daily_silver_hc` is a rolling snapshot until the session ends.
+Each start notebook is idempotent — it checks pipeline/app state first and only starts if
+`IDLE`/`FAILED` (or `STOPPED` for the app), so it's safe to re-run or overlap with an
+already-running instance. Each stop notebook only stops if currently `RUNNING`. Update the
+hardcoded `PIPELINE_ID` / `APP_NAME` constants at the top of each notebook to match your workspace
+before scheduling these as Jobs.
 
-**End-of-day chain** (run after Bronze streaming stops ~4:20 PM ET):
+- **Prerequisite**: Jobs 1 + 2 (Bronze streaming producer + ingestion) must be **running** during
+  this window so Bronze Delta receives Kafka bars. Silver does not read Kafka directly.
+- **Gold ordering**: Gold starts at the same time as Silver, not after it — it reads Silver via
+  `spark.read.table`, so a given Gold cycle picks up whatever Silver has committed by then rather
+  than waiting on a completion signal.
+- **Layer 3 (in-pipeline)**: Each Silver update finishes `ohlcv_silver_hc` MERGE **before**
+  `ohlcv_daily_silver_hc` incremental rollup in the same cycle — no separate daily job needed.
+- Today's daily bar in `ohlcv_daily_silver_hc` is a rolling snapshot that keeps refreshing as the
+  continuous pipeline reacts to new Bronze rows until the 5:00 PM ET stop.
 
-1. Task 1: Trigger Silver OHLCV DLT pipeline (final catch-up for today's session)
-2. Task 2: Trigger Silver News DLT pipeline (parallel with Task 1)
-3. Task 3: Trigger Gold DLT pipeline (**depends on Tasks 1 + 2** — Gold reads Silver via `spark.read.table`)
+**Manual/off-hours flows** (flat-file incremental, historical backfill) still use the Trigger
+button or `databricks pipelines start-update <id> --full-refresh=false` on demand, since the
+pipeline may be idle outside 9:30 AM–5:00 PM ET:
 
-Optional morning chain (after flat-file incremental):
+1. `incremental_ingestion_flatfiles.py` (Job 4) → start the Silver OHLCV pipeline update if it
+   isn't already running — it picks up the new Bronze rows through the minute stream, and the
+   daily MV refreshes the affected dates
+2. Historical backfill: run Job 6 with `start_date`/`end_date` → start Silver OHLCV once
+   (metadata path, or `silver.backfill_start_date`/`silver.backfill_end_date` config) → start Gold
 
-1. Task A: `incremental_ingestion_flatfiles.py` (Job 4)
-2. Task B: Silver OHLCV DLT (**depends on Task A**) — picks up the new Bronze rows through the minute stream; the daily MV refreshes the affected dates
-
-**Manual historical backfill:**
-
-1. Run Job 6 with `start_date` / `end_date`
-2. Trigger Silver OHLCV DLT once (metadata + optional `silver.backfill_start_date` / `silver.backfill_end_date` config)
-3. Trigger Gold DLT
-
-**First-time migration:** if an old streaming `ohlcv_daily_silver_hc` exists, drop it once before the first run so it is recreated as a materialized view; that run is a full recompute, then serverless refreshes it incrementally.
+**First-time migration:** if an old streaming `ohlcv_daily_silver_hc` exists, drop it once before
+the first run so it is recreated as a materialized view; that run is a full recompute, then
+serverless refreshes it incrementally.
 
 ---
 
-## Step 7: Run the Streamlit Dashboard
+## Step 7: Deploy the Streamlit Dashboard
 
-Once Gold tables are populated:
+### Production: Databricks App
+
+Once Gold tables are populated, the dashboard runs as a **Databricks App** named
+`market-analytics-dashboard`, configured by `databricks/dashboard/app.yaml`
+(`streamlit run app.py`, with `DATABRICKS_WAREHOUSE_ID` set as an app env var). It is started and
+stopped on the same 9:30 AM / 5:00 PM ET Mon–Fri schedule as the DLT pipelines via
+`market_analytics_app_start.py` / `market_analytics_app_stop.py` (see Step 6, Job 7).
+
+1. In Databricks: **Compute** → **Apps** → **Create app**, point it at `databricks/dashboard/`
+2. Deploy — it installs `databricks/dashboard/requirements.txt` and runs the `app.yaml` command
+3. Confirm the app is reachable and reads Gold tables via the connection configured in
+   `databricks/dashboard/utils/connection.py`
+
+### Local development
+
+To run the dashboard locally against the same Databricks SQL warehouse:
 
 ```bash
 pip install -r databricks/dashboard/requirements.txt
@@ -376,14 +412,14 @@ LIMIT 5;
 
 **When to use:** Bad source data was corrected in Polygon S3, or a Bronze partition is corrupt.
 
-**How it works:** Re-runs `historical_ingestion_flatfiles.py` for the target date range. Dynamic partition overwrite replaces only those `date` partitions in Bronze. Silver picks up the changes on its next DLT run: minute rows via `apply_changes` MERGE on `(symbol, start_timestamp)`, and the daily materialized view `ohlcv_daily_silver_hc` refreshes the affected `(symbol, date)` groups.
+**How it works:** Re-runs `historical_ingestion_flatfiles.py` for the target date range. Dynamic partition overwrite replaces only those `date` partitions in Bronze. Silver picks up the changes automatically if its continuous pipeline is already running (9:30 AM–5:00 PM ET); otherwise start it manually. Minute rows merge via `apply_changes` MERGE on `(symbol, start_timestamp)`, and the daily materialized view `ohlcv_daily_silver_hc` refreshes the affected `(symbol, date)` groups.
 
 **Steps:**
 1. Open `databricks/bronze/historical_ingestion_flatfiles.py`
 2. Set widgets: `start_date` and `end_date` to the target range
 3. Run all cells
-4. Trigger the Silver OHLCV DLT pipeline (optional: set `silver.backfill_start_date` / `silver.backfill_end_date` to the same range if metadata path is unavailable)
-5. After Silver succeeds, trigger Gold DLT if daily analytics must refresh immediately
+4. If outside market hours, start the Silver OHLCV DLT pipeline update (optional: set `silver.backfill_start_date` / `silver.backfill_end_date` to the same range if metadata path is unavailable) — during market hours it's already running and will pick this up on its own
+5. After Silver processes the change, start/confirm the Gold pipeline if daily analytics must refresh immediately
 
 **Verification:**
 ```sql
@@ -411,7 +447,7 @@ GROUP BY date ORDER BY date;
    ```
 3. To replay specific dates from Kafka, use `bronze/kafka_replay_backfill.py` with `REPLAY_START_DATE` and `REPLAY_END_DATE` set (preview with `DRY_RUN=True` first)
 4. Restart the streaming ingestion job — it resumes from the latest Kafka offset
-5. Silver deduplicates minute rows via `apply_changes` MERGE; the daily materialized view refreshes the affected dates on the next Silver trigger
+5. Silver deduplicates minute rows via `apply_changes` MERGE; the daily materialized view refreshes the affected dates on the next cycle of the (already-running) Silver pipeline
 
 ### Scenario 3 — Full DLT pipeline reset (Silver / Gold)
 
@@ -421,19 +457,32 @@ GROUP BY date ORDER BY date;
 
 **Steps:**
 1. In Databricks: **Delta Live Tables** → open the Silver pipeline
-2. Click **⋮ (more options)** → **Full Refresh**
-3. After Silver completes, trigger the Gold pipeline normally
+2. Click **⋮ (more options)** → **Full Refresh** (this stops any active continuous update first)
+3. After Silver completes, start the Gold pipeline (or wait for its next scheduled 9:30 AM ET start)
 
 > During a full refresh, downstream Gold queries see partial data until the pipeline completes. Schedule during off-hours if the dashboard is active.
+
+### Scenario 4 — Session gap where streaming never reached Kafka
+
+**When to use:** The producer or streaming ingestion job failed to start (e.g. cluster failure) during market hours, so a window of bars for that session was never published to Kafka — `kafka_replay_backfill.py` has nothing to replay because the data never arrived there.
+
+**How it works:** `bronze/rest_aggs_backfill.py` fetches the gap window per ticker directly from the Polygon REST aggregates API (`adjusted=False`, matching Bronze's raw convention) and appends it to Bronze streaming with `source = "polygon_rest_backfill"` (source_priority 0). No gap detection — it fetches a bounded window (default 09:30–10:00 ET) and lets Silver's dedup pick winners: live-streamed bars (priority 1) win wherever they exist, REST bars survive only in true holes, and next-day flat files (priority 2) supersede both. Over-fetching is harmless.
+
+**Steps:**
+1. Open `databricks/bronze/rest_aggs_backfill.py`
+2. Leave `dry_run = true` and run to preview row counts; widen `start_time`/`end_time` for longer outages
+3. Set `dry_run = false` to append
+4. No Silver action needed if its continuous pipeline is already running — it merges the new Bronze rows on its next cycle
 
 ### Quick Reference
 
 | Scenario | Mechanism | Bronze touched | Silver action | Scope |
 |---|---|---|---|---|
-| Fix specific dates | Historical backfill re-run | Partition overwrite (target dates) | Auto-merges on next DLT run | Targeted |
+| Fix specific dates | Historical backfill re-run | Partition overwrite (target dates) | Auto-merges on next continuous cycle | Targeted |
 | Replay Kafka dates | `kafka_replay_backfill.py` | Append-only | Minute MERGE + daily MV refresh via Silver DLT | Specific dates |
 | Checkpoint lost | Delete checkpoint + restart | Resumes from latest offset | No action needed | Forward only |
 | Rebuild Silver | DLT Full Refresh | Not touched | Full reprocess from all Bronze | All Silver + Gold |
+| Streaming never started (session gap) | `rest_aggs_backfill.py` | Append-only | Dedup picks winner on next continuous cycle | Bounded time window |
 
 ---
 
@@ -494,16 +543,26 @@ GROUP BY rejection_reason;
 
 **Estimated Monthly Costs (market hours only):**
 
+> **Note:** Silver OHLCV, Silver News, and Gold DLT now run in **Continuous** mode, started/stopped
+> by Jobs at 9:30 AM / 5:00 PM ET (Step 6, Job 7) instead of firing as short triggered runs — each
+> holds compute for the full ~7.5-hour window, roughly matching the streaming jobs' footprint below
+> rather than the few-triggered-runs figure this table previously assumed. The Dashboard App
+> (`market-analytics-dashboard`) adds its own compute on the same schedule and isn't itemized here.
+> Treat the figures below as rough, pre-continuous-mode estimates — pull actual DBU usage from the
+> workspace's usage/billing dashboard for current numbers.
+
 | Component | Cluster | Hours/Month | Est. Cost |
 |-----------|---------|-------------|-----------|
 | Streaming Producer | Single node, 4 cores | ~140 hrs | ~$56 |
 | Streaming Ingestion | Single node, 4 cores | ~140 hrs | ~$56 |
 | News Ingestion | Single node, 4 cores | ~21 hrs | ~$8 |
 | Incremental Flat Files | Single node, 4 cores | ~5 hrs | ~$2 |
-| Silver DLT (triggered) | Enhanced, 1–2 workers | ~10 hrs | ~$15 |
-| Gold DLT (triggered) | Enhanced, 1–2 workers | ~5 hrs | ~$8 |
+| Silver OHLCV DLT (continuous, ~140 hrs) | Enhanced, 1–2 workers | ~140 hrs | ~$60 |
+| Silver News DLT (continuous, ~140 hrs) | Enhanced, 1–2 workers | ~140 hrs | ~$60 |
+| Gold DLT (continuous, ~140 hrs) | Enhanced, 1–2 workers | ~140 hrs | ~$60 |
+| Dashboard App (~140 hrs) | Databricks App compute | ~140 hrs | not itemized |
 | Storage (Bronze + Silver + Gold) | ~20 GB/month | N/A | <$2 |
-| **Total** | | | **~$147/month** |
+| **Total** | | | **~$302/month + App compute** |
 
 **Savings Tips:**
 - Use spot instances (30–50% savings)
@@ -535,10 +594,20 @@ databricks/
 │   ├── ticker_details_ingestion.py             ← Polygon REST → Bronze (ticker metadata)
 │   ├── splits_ingestion.py                     ← Polygon REST → Bronze (stock splits)
 │   ├── kafka_replay_backfill.py                ← Kafka batch replay for specific dates
+│   ├── rest_aggs_backfill.py                   ← REST gap-fill for sessions streaming never reached
 │   └── bronze_utils.py                         ← Shared Bronze helpers
 ├── silver/
 │   ├── ohlcv_silver_dlt.py                     ← DLT: clean, deduplicate, WAP quarantine OHLCV
-│   └── news_silver_dlt.py                      ← DLT: clean, deduplicate news articles
+│   ├── news_silver_dlt.py                      ← DLT: clean, deduplicate news articles
+│   └── jobs/                                   ← Continuous pipeline/app start-stop notebooks (Step 6, Job 7)
+│       ├── ohlcv_silver_pipeline_start.py
+│       ├── ohlcv_silver_pipeline_stop.py
+│       ├── news_silver_pipeline_start.py
+│       ├── news_silver_pipeline_stop.py
+│       ├── gold_pipeline_start.py
+│       ├── gold_pipeline_stop.py
+│       ├── market_analytics_app_start.py
+│       └── market_analytics_app_stop.py
 ├── gold/
 │   ├── fact_daily_market_dlt.py                ← Daily OHLCV fact table
 │   ├── fact_minute_market_dlt.py               ← 1-minute OHLCV fact table (rolling window)
@@ -550,6 +619,8 @@ databricks/
 │   ├── ohlcv_dedup_spark.py                    ← Deterministic dedup for OHLCV records
 │   ├── ohlcv_quarantine_spark.py               ← WAP quarantine logic for OHLCV
 │   ├── aggregation_utils.py                    ← Daily bar aggregation from minute data (daily MV)
+│   ├── daily_metrics_spark.py                  ← Rolling screener/watchlist metrics on Gold adjusted daily fact
+│   ├── rest_aggs_backfill_runtime.py           ← Runtime helpers for rest_aggs_backfill.py
 │   ├── wap_audit_spark.py                      ← WAP audit log writer
 │   ├── streaming_transforms.py                 ← Kafka message parsing transforms
 │   ├── streaming_ingestion_runtime.py          ← Streaming lifecycle management
@@ -565,8 +636,9 @@ databricks/
 │   └── add_table_constraints.py                ← One-time: add PK/FK to Gold tables
 └── dashboard/
     ├── app.py                                  ← Streamlit entry point
-    ├── app.yaml                                ← Deployment config
+    ├── app.yaml                                ← Databricks App deployment config (Step 7)
     ├── requirements.txt                        ← Dashboard-specific dependencies
+    ├── DASHBOARD_QUERIES.md                    ← Reference: SQL queries backing each dashboard view
     ├── pages/
     │   ├── 1_Signal_Screener.py                ← Market screener page
     │   ├── 2_Stock_Deep_Dive.py                ← Single-ticker deep dive

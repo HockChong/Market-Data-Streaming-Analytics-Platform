@@ -1,6 +1,6 @@
 # Bronze Layer Entity Relationship Diagram (ERD)
 
-This document maps out the Bronze Layer. As the raw ingestion layer, Bronze tables are largely independent and append-only. However, logical connections (business keys) implicitly join the streaming data, batch data, and reference metadata.
+This document maps out the **Bronze Layer** — the raw, immutable landing zone of the platform's [Bronze → Silver → Gold](ARCHITECTURE.md) medallion pipeline, fed by Polygon.io's WebSocket (via Kafka), REST API, and S3 flat files. As the raw ingestion layer, Bronze tables are largely independent and append-only — no business filtering or deduplication happens here (see [SILVER_LAYER_ERD.md](SILVER_LAYER_ERD.md) for cleaned/deduped data, or [DATA_DICTIONARY.md](DATA_DICTIONARY.md) for full column definitions). However, logical connections (business keys) implicitly join the streaming data, batch data, and reference metadata.
 
 ```mermaid
 erDiagram
@@ -20,11 +20,11 @@ erDiagram
         double average_trade_size "Nullable - avg trade size for this window"
         boolean otc "Nullable - OTC flag from Polygon"
         bigint transactions "Nullable - always NULL for streaming (not in WebSocket AM events)"
-        timestamp ingestion_timestamp "Producer-stamped; from_avro decodes timestamp-millis to TIMESTAMP"
-        timestamp kafka_ingestion_timestamp "Kafka broker timestamp"
-        string topic
-        int partition
-        bigint offset
+        bigint ingestion_timestamp "Producer-stamped epoch millis; from_avro decodes timestamp-millis to TIMESTAMP, then cast back to BIGINT epoch seconds before the Bronze write to match REST-backfill and replay writers (databricks/utils/streaming_ingestion_runtime.py:84)"
+        timestamp kafka_ingestion_timestamp "Nullable - Kafka broker timestamp"
+        string topic "Nullable - Kafka topic name"
+        int partition "Nullable - Kafka partition number"
+        bigint offset "Nullable - Kafka message offset"
         timestamp processing_timestamp
         string correlation_id
         string source

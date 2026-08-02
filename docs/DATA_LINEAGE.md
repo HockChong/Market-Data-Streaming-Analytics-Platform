@@ -30,8 +30,9 @@ This document provides a comprehensive view of data flow through the Market Data
 │                                                                                               │
 │  streaming_ingestion.py  ticker_details_     historical_ingestion_flatfiles.py               │
 │  kafka_replay_backfill.py  ingestion.py      incremental_ingestion_flatfiles.py              │
-│         │                     │              news_ingestion.py  splits_ingestion.py           │
-│         ▼                     ▼                  │        │          │                        │
+│  rest_aggs_backfill.py         │              news_ingestion.py  splits_ingestion.py           │
+│         │                      │                  │        │          │                        │
+│         ▼                      ▼                  │        │          │                        │
 │  ┌────────────────┐  ┌──────────────────┐       ▼        │          ▼                        │
 │  │ bronze/streaming│  │ bronze/ticker_   │ ┌──────────┐  │  ┌──────────────┐                 │
 │  │ (Delta Lake)   │  │ details          │ │ bronze/  │  │  │ bronze/splits │                 │
@@ -258,7 +259,7 @@ bronze_unified_hc ──► Filter (valid) ──► ohlcv_silver_enriched_hc �
 - Schema validation via Avro (Kafka + Schema Registry)
 - No data quality filtering (immutable audit trail — all raw data preserved)
 - Quality enforcement deferred to Silver layer via DLT expectations
-- OTC stocks are filtered at the Bronze→Silver boundary (`otc IS NULL` via `coalesce(otc, false)` in `ohlcv_silver_dlt.py`)
+- OTC (over-the-counter) stocks are filtered at the Bronze→Silver boundary (`otc IS NULL` via `coalesce(otc, false)` in `ohlcv_silver_dlt.py`)
 
 ### Silver Layer (DLT Expectations)
 
@@ -346,11 +347,11 @@ tabular.dataexpert.<table_name>
 | When | Job | Depends on | Notes |
 |------|-----|------------|-------|
 | Market hours | Bronze streaming producer + ingestion (Jobs 1–2) | — | Kafka → Bronze Delta; Silver does not read Kafka directly |
-| Every 5 min (market hours) | Silver OHLCV DLT (Job 7) | Bronze streaming **running** | Same update: minute MERGE → daily MV refresh (serverless incremental) |
-| After session | Gold DLT (Job 8) | Silver OHLCV **success** | Reads `ohlcv_daily_silver_hc` via `spark.read.table` |
-| Daily off-hours | Incremental flat files (Job 4) → Silver | Bronze job success | Flat-file backfill flows into minute Silver; daily MV picks up the changed dates |
+| 9:30 AM–5:00 PM ET (continuous) | Silver OHLCV DLT | Bronze streaming **running** | Continuous pipeline, started/stopped by Job 7 (not a fixed trigger cron); each update: minute MERGE → daily MV refresh (serverless incremental) |
+| 9:30 AM–5:00 PM ET (continuous, parallel with Silver) | Gold DLT | Silver OHLCV **running** | Continuous pipeline, started/stopped by Job 7; reads `ohlcv_daily_silver_hc` via `spark.read.table` on each cycle, not gated on a Silver completion signal |
+| Daily off-hours | Incremental flat files (Job 4) → Silver | Bronze job success | Flat-file backfill flows into minute Silver; daily MV picks up the changed dates once Silver's continuous pipeline (or a manual start) processes them |
 
-See `databricks/DEPLOYMENT_GUIDE.md` Jobs 7–8 for cron and DLT configuration keys.
+See `databricks/DEPLOYMENT_GUIDE.md` Step 6, Job 7 for the continuous pipeline start/stop schedule and DLT configuration keys.
 
 ## Monitoring Points
 

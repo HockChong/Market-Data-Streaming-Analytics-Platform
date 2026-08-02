@@ -28,8 +28,6 @@ addopts = "-ra --strict-markers --strict-config --maxfail=1 --tb=short"
 markers = [
     "unit: fast pure-python tests with no Spark runtime dependency",
     "integration: tests that exercise Spark or multi-module pipeline behavior",
-    "smoke: fast critical pipeline sanity checks",
-    "slow: heavy tests excluded from quick local runs",
     "contract: schema/config invariants and cross-layer compatibility checks",
     "spark_integration: requires local SparkSession (slow; skip with -m 'not spark_integration')",
 ]
