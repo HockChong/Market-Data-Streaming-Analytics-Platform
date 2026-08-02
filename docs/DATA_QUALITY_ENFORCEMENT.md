@@ -253,7 +253,11 @@ structural predicates:
 - **No freshness or latency SLA.** `session_complete` is a coarse volume signal; nothing
   asserts that today's data arrived on time.
 - **Rolling windows, not full history.** Quarantine and the audit counts cover 30 days;
-  `session_bars` covers 3. Older rejections age out of the audit surface.
+  `session_bars` covers 3. Older rejections age out of the audit surface. That trade bounds
+  per-run scan cost but ties retention length to scan cost — decoupling them (an
+  incremental/append `wap_audit_log_hc`, upserting on `audit_date` instead of recomputing
+  the full window each run) is listed as a next step in the
+  [project README](../README.md#limitations--what-id-do-next).
 - **Three-valued logic at the boundary.** The WAP predicates are SQL comparisons, so a
   `NULL` price would make both `is_valid` and `~is_all_valid` evaluate to `NULL` and the
   row would fall out of *both* paths. The Avro contract closes this for the streaming feed

@@ -121,5 +121,5 @@ Deep-dive documentation, including analyst-style business questions answerable f
 ## Limitations & what I'd do next
 
 - **The feed is delayed, not true real-time.** The platform uses Polygon's delayed WebSocket feed; the architecture wouldn't change for the real-time feed, but latency claims are bounded by the source.
-- **Quarantine and audit cover a rolling 30-day window**, not all history — a deliberate trade-off to keep per-run scan cost constant. Older rejections age out of the audit tables.
+- **Quarantine and audit cover a rolling 30-day window**, not all history — a deliberate trade-off to keep per-run scan cost constant. Older rejections age out of the audit tables. A next step, if a real retention requirement ever applied, would be making `wap_audit_log_hc` incremental (upsert on `audit_date`) rather than a full 30-day recompute — unbounded history without rescanning it every run. The row-level quarantine table can stay as-is, since Bronze already serves as its unbounded, immutable archive.
 - **Single environment, no staging.** A next step would be a dev/prod split with Databricks Asset Bundles and table-level permissions, plus alerting on the WAP audit gate instead of relying on pipeline failure.
